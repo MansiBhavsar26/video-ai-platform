@@ -81,7 +81,7 @@ does not contain YouTube account credentials or cookies. When it is absent,
 local development falls back to `youtube-transcript-api`; production should
 configure the provider key because cloud-provider IPs may be blocked by
 YouTube. Optional settings include `SUPADATA_TIMEOUT_SECONDS`, `UPLOAD_DIR`,
-`FRAMES_DIR`, `TESSERACT_PATH`, `YOLO_MODEL_PATH`, and the existing smart-sampling settings. `TESSERACT_PATH`
+`FRAMES_DIR`, `UPLOAD_MAX_BYTES`, `TESSERACT_PATH`, `YOLO_MODEL_PATH`, and the existing smart-sampling settings. `TESSERACT_PATH`
 should be omitted when the `tesseract` executable is on the Linux `PATH`.
 
 Install the backend dependencies with:
@@ -109,13 +109,56 @@ For verification, check `/health`, `/docs`, `POST /api/early-access`, a YouTube
 analysis request, and `GET /videos/{id}/steps`. Set `CORS_ORIGINS` to a
 comma-separated list of exact allowed origins; do not use `*` in production.
 
-Uploads and generated frames are runtime files and require writable storage.
-They are not suitable for ephemeral storage when uploaded-video analysis must
-survive restarts. The transcript-based YouTube guide endpoint does not download
-the video or require local video files. Full uploaded-video analysis additionally
-requires OpenCV, Tesseract, and the YOLO weights configured by
-`YOLO_MODEL_PATH`; the model file is not downloaded automatically.
+Full uploaded-video analysis requires OpenCV, Tesseract, and the YOLO weights
+configured by `YOLO_MODEL_PATH`; the model file is not downloaded automatically.
+
+### Temporary video and frame storage
+
+Uploaded source videos are stored on the backend's local filesystem under
+`UPLOAD_DIR`; extracted frames are stored under `FRAMES_DIR`. Both paths are
+configurable with environment variables and use platform-native path handling.
+For local development, relative paths resolve from the backend process's
+working directory:
+
+```dotenv
+UPLOAD_DIR=./uploads
+FRAMES_DIR=./frames
+UPLOAD_MAX_BYTES=2147483648
+```
+
+The defaults are `backend/uploads` and `backend/frames`. The source video stays
+on disk after analysis so it can be analyzed again. Frames are intermediate
+analysis files; persistent transcripts, detections, evidence, and tutorial
+steps are stored in PostgreSQL. The database health endpoint checks database
+and application health, and does not require media directories to contain
+files.
+
+Render Free uses an ephemeral service filesystem and does not provide a
+persistent disk. Videos and extracted frames are temporary there and may be
+removed after a restart, redeploy, or instance replacement. PostgreSQL results
+remain persistent, but if a source video has disappeared, users must upload it
+again to rerun its video analysis. The analyze endpoint returns a safe
+application error asking the user to upload the video again; it does not return
+a server filesystem path or Python traceback. This MVP does not provide
+persistent uploaded-media storage on Render Free.
+
+The transcript-based YouTube guide pipeline continues to use its existing
+transcript provider and does not require locally uploaded media.
 
 Do not commit `.env` files, credentials, generated media, frames, or model
 weights. Configure `VITE_API_BASE_URL` in the frontend deployment with the
 public backend URL, for example `https://YOUR-BACKEND-DOMAIN`.
+
+## Local video uploads
+
+The app accepts `.mp4`, `.mov`, `.webm`, and `.mkv` uploads. MP4 is the recommended format. `POST /videos/upload` accepts multipart form data in the `file` field, checks the media type, extension, empty-file condition, and configured size limit, then stores it under `UPLOAD_DIR` with a generated filename. `UPLOAD_MAX_BYTES` sets the limit in bytes and defaults to 2 GiB. The endpoint returns the created video ID and safe metadata, not its storage path.
+
+Start processing with `POST /videos/{video_id}/analyze`, then poll `GET /videos/{video_id}/status` until the status is `completed` or `failed`. Completed guides are available at `GET /videos/{video_id}/steps`. Upload analysis uses faster-whisper and the existing visual analysis services. Local development needs FFmpeg and writable upload/frame storage. On Render Free, both source videos and extracted frames use the ephemeral service filesystem and can disappear after restart or redeploy.
+
+`VideoEvidence` rows currently come from cleaned OCR text found in sampled
+frames. They may be empty when the video has no legible screen text or OCR
+filters all detections. Tutorial steps keep their transcript evidence on the
+step records separately. In the recent 144p React tutorial excerpt run, the
+analysis completed with transcript-backed steps but no cleaned OCR evidence, so
+zero `VideoEvidence` records were expected for that run; this does not mean the
+transcript or tutorial-step pipeline failed.

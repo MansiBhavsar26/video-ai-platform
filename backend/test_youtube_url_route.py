@@ -147,9 +147,12 @@ def test_existing_completed_youtube_video_is_idempotent(monkeypatch):
 
 
 def test_non_youtube_url_keeps_existing_acquisition_flow(monkeypatch, tmp_path):
+    from app.services.storage import LocalStorageBackend
+
     filepath = Path(tmp_path) / "sample.mp4"
     filepath.write_bytes(b"video")
     calls = []
+    storage = LocalStorageBackend(tmp_path / "uploads", tmp_path / "frames")
 
     def acquire(url):
         calls.append(url)
@@ -160,6 +163,7 @@ def test_non_youtube_url_keeps_existing_acquisition_flow(monkeypatch, tmp_path):
         }
 
     monkeypatch.setattr(videos, "acquire_video_from_url", acquire)
+    monkeypatch.setattr(videos, "get_local_storage", lambda: storage)
     monkeypatch.setattr(
         videos,
         "get_video_info",
@@ -173,13 +177,16 @@ def test_non_youtube_url_keeps_existing_acquisition_flow(monkeypatch, tmp_path):
 
     assert response.status_code == 200
     assert calls == ["https://example.com/sample.mp4"]
+    assert "filepath" not in response.json()
     video_id = response.json()["id"]
 
     db = SessionLocal()
     try:
         video = db.query(Video).filter(Video.id == video_id).first()
         assert video is not None
+        stored_path = Path(video.filepath)
         db.delete(video)
         db.commit()
     finally:
         db.close()
+    storage.delete(str(stored_path))

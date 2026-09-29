@@ -1,5 +1,3 @@
-import os
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -7,9 +5,9 @@ from sqlalchemy import text
 
 from .config import (
     CORS_ORIGINS,
-    FRAMES_DIR,
     UPLOAD_DIR,
 )
+from .services.storage import get_local_storage
 
 from .database import Base, SessionLocal, engine
 from . import models
@@ -20,9 +18,8 @@ from .routes.transcript import router as transcript_router
 from .routes.youtube import router as youtube_router
 
 
-# Make sure required directories exist
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-os.makedirs(FRAMES_DIR, exist_ok=True)
+# Initialize the configured local media directories at startup.
+get_local_storage()
 
 
 # Create database tables
@@ -47,7 +44,7 @@ app.add_middleware(
 )
 
 
-# Serve uploaded videos
+# Preserve the existing local upload URL for local development.
 app.mount(
     "/uploads",
     StaticFiles(directory=UPLOAD_DIR),

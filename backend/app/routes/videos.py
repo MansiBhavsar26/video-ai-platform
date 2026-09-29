@@ -1,7 +1,7 @@
 import os
-import shutil
 import uuid
 import logging
+import tempfile
 
 from pathlib import Path
 
@@ -16,7 +16,7 @@ from fastapi import (
 
 from sqlalchemy.orm import Session
 
-from ..config import UPLOAD_DIR
+from ..config import UPLOAD_MAX_BYTES
 from ..database import get_db
 from ..models import Video, Detection
 from ..services.video_processor import get_video_info
@@ -29,6 +29,11 @@ from .youtube import (
     transcript_http_error,
 )
 from ..services.youtube_transcript import YouTubeTranscriptError
+from ..services.storage import (
+    StorageError,
+    get_local_storage,
+    make_video_storage_key,
+)
 
 
 router = APIRouter(
@@ -39,11 +44,12 @@ router = APIRouter(
 logger = logging.getLogger(__name__)
 
 
+def _delete_storage_reference(storage, reference: str) -> None:
+    try:
+        storage.delete(reference)
+    except StorageError:
+        logger.exception("Unable to clean up stored video")
 
-os.makedirs(
-    UPLOAD_DIR,
-    exist_ok=True,
-)
 
 
 # ==================================================
@@ -64,12 +70,11 @@ def upload_video(
     allowed_extensions = {
         ".mp4",
         ".mov",
-        ".avi",
         ".mkv",
         ".webm",
     }
 
-    original_filename = Path(file.filename).name
+    original_filename = Path(file.filename.replace("\\", "/")).name
     extension = Path(original_filename).suffix.lower()
 
     if extension not in allowed_extensions:
@@ -82,27 +87,55 @@ def upload_video(
             ),
         )
 
-    unique_filename = (
-        f"{uuid.uuid4().hex}{extension}"
-    )
+    content_type = (file.content_type or "").lower()
+    allowed_content_types = {
+        "video/mp4", "video/quicktime", "video/webm", "video/x-matroska",
+        "application/octet-stream",
+    }
+    if content_type and content_type not in allowed_content_types:
+        raise HTTPException(status_code=400, detail="Unsupported video content type.")
 
-    filepath = os.path.join(
-        UPLOAD_DIR,
-        unique_filename,
-    )
+    storage = None
+    storage_reference = None
+    total_bytes = 0
 
     try:
-        with open(filepath, "wb") as buffer:
-            shutil.copyfileobj(
-                file.file,
-                buffer,
-            )
+        storage = get_local_storage()
+        with tempfile.SpooledTemporaryFile(
+            max_size=8 * 1024 * 1024,
+            mode="w+b",
+        ) as buffer:
+            while chunk := file.file.read(1024 * 1024):
+                total_bytes += len(chunk)
+                if total_bytes > UPLOAD_MAX_BYTES:
+                    raise HTTPException(status_code=413, detail="Video exceeds the upload size limit.")
+                buffer.write(chunk)
 
-        info = get_video_info(filepath)
+            if total_bytes == 0:
+                raise HTTPException(status_code=400, detail="The selected video file is empty.")
+
+            buffer.seek(0)
+            key = make_video_storage_key(uuid.uuid4().hex, extension)
+            storage_reference = storage.save_stream(buffer, key)
+
+        with storage.materialize(storage_reference) as local_path:
+            info = get_video_info(local_path)
+    except HTTPException:
+        if storage and storage_reference:
+            _delete_storage_reference(storage, storage_reference)
+        raise
+    except StorageError as error:
+        if storage and storage_reference:
+            _delete_storage_reference(storage, storage_reference)
+        logger.exception("Video storage operation failed")
+        raise HTTPException(
+            status_code=503,
+            detail="Video storage is unavailable.",
+        ) from error
 
     except Exception:
-        if os.path.exists(filepath):
-            os.remove(filepath)
+        if storage and storage_reference:
+            _delete_storage_reference(storage, storage_reference)
 
         logger.exception("Unable to process uploaded video")
 
@@ -113,25 +146,42 @@ def upload_video(
 
     video = Video(
         filename=original_filename,
-        filepath=filepath,
+        filepath=storage_reference,
         duration=info["duration"],
         fps=info["fps"],
         status="uploaded",
         source_type="upload",
     )
 
-    db.add(video)
-    db.commit()
-    db.refresh(video)
+    try:
+        db.add(video)
+        db.commit()
+        db.refresh(video)
+    except Exception as error:
+        db.rollback()
+        _delete_storage_reference(storage, storage_reference)
+        logger.exception("Unable to save uploaded video record")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to save uploaded video.",
+        ) from error
 
     return {
         "id": video.id,
         "filename": video.filename,
-        "filepath": video.filepath,
         "duration": video.duration,
         "fps": video.fps,
         "status": video.status,
+        "source_type": video.source_type,
     }
+
+
+@router.get("/{video_id}/status")
+def get_video_status(video_id: int, db: Session = Depends(get_db)):
+    video = db.query(Video).filter(Video.id == video_id).first()
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found.")
+    return {"video_id": video.id, "status": video.status}
 
 # ==================================================
 # Analyze Video
@@ -159,6 +209,15 @@ def analyze_uploaded_video(
         raise HTTPException(
             status_code=409,
             detail="Video analysis is already in progress.",
+        )
+
+    if video.filepath and not get_local_storage().exists(video.filepath):
+        raise HTTPException(
+            status_code=410,
+            detail=(
+                "The uploaded video is no longer available. "
+                "Please upload the video again."
+            ),
         )
 
     video.status = "processing"
@@ -304,31 +363,59 @@ def add_video_from_url(
             db=db,
         )
 
+    storage = None
+    storage_reference = None
     try:
+        storage = get_local_storage()
         result = acquire_video_from_url(
             url
         )
 
-        filepath = result["filepath"]
+        source_filepath = result["filepath"]
 
-        if not os.path.exists(filepath):
+        if not os.path.exists(source_filepath):
             raise ValueError(
                 "Video acquisition completed, "
                 "but the video file was not found."
             )
 
         info = get_video_info(
-            filepath
+            source_filepath
         )
 
+        extension = Path(source_filepath).suffix.lower()
+        if extension not in {".mp4", ".mov", ".mkv", ".webm"}:
+            extension = ".mp4"
+        storage_reference = storage.save_file(
+            source_filepath,
+            make_video_storage_key(uuid.uuid4().hex, extension),
+        )
+        if storage_reference != source_filepath:
+            os.remove(source_filepath)
+
+    except StorageError as error:
+        if storage and storage_reference:
+            _delete_storage_reference(storage, storage_reference)
+        if "source_filepath" in locals() and os.path.exists(source_filepath):
+            try:
+                os.remove(source_filepath)
+            except OSError:
+                pass
+        logger.exception("Unable to store acquired video")
+        raise HTTPException(
+            status_code=503,
+            detail="Video storage is unavailable.",
+        ) from error
     except Exception:
 
-        if "filepath" in locals():
-            if filepath and os.path.exists(filepath):
+        if "source_filepath" in locals():
+            if source_filepath and os.path.exists(source_filepath):
                 try:
-                    os.remove(filepath)
+                    os.remove(source_filepath)
                 except OSError:
                     pass
+        if storage_reference:
+            _delete_storage_reference(storage, storage_reference)
 
         logger.exception("Unable to acquire video from URL")
         raise HTTPException(
@@ -344,9 +431,9 @@ def add_video_from_url(
     video = Video(
         filename=(
             result.get("title")
-            or Path(filepath).name
+            or Path(source_filepath).name
         ),
-        filepath=filepath,
+        filepath=storage_reference,
         duration=(
             info.get("duration")
             or result.get("duration")
@@ -371,14 +458,22 @@ def add_video_from_url(
         ),
     )
 
-    db.add(video)
-    db.commit()
-    db.refresh(video)
+    try:
+        db.add(video)
+        db.commit()
+        db.refresh(video)
+    except Exception as error:
+        db.rollback()
+        _delete_storage_reference(storage, storage_reference)
+        logger.exception("Unable to save acquired video record")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to save video.",
+        ) from error
 
     return {
         "id": video.id,
         "filename": video.filename,
-        "filepath": video.filepath,
         "duration": video.duration,
         "fps": video.fps,
         "status": video.status,
@@ -450,7 +545,6 @@ def get_video(
     return {
         "id": video.id,
         "filename": video.filename,
-        "filepath": video.filepath,
         "duration": video.duration,
         "fps": video.fps,
         "status": video.status,

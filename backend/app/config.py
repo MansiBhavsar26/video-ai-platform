@@ -36,19 +36,23 @@ SUPADATA_TIMEOUT_SECONDS = float(
 BASE_DIR = Path(__file__).resolve().parents[1]
 
 
+def _configured_directory(environment_variable: str, default: Path) -> str:
+    """Return an absolute, platform-native directory from configuration."""
+    configured_path = Path(os.getenv(environment_variable, str(default))).expanduser()
+    return str(configured_path.resolve())
+
+
 PORT = int(os.getenv("PORT", "8000"))
 
 
-UPLOAD_DIR = os.getenv(
-    "UPLOAD_DIR",
-    str(BASE_DIR / "uploads"),
+UPLOAD_DIR = _configured_directory("UPLOAD_DIR", BASE_DIR / "uploads")
+
+UPLOAD_MAX_BYTES = int(
+    os.getenv("UPLOAD_MAX_BYTES", str(2 * 1024 * 1024 * 1024))
 )
 
 
-FRAMES_DIR = os.getenv(
-    "FRAMES_DIR",
-    str(BASE_DIR / "frames"),
-)
+FRAMES_DIR = _configured_directory("FRAMES_DIR", BASE_DIR / "frames")
 
 
 YOLO_MODEL_PATH = os.getenv(

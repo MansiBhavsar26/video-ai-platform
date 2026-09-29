@@ -81,3 +81,5 @@ Until that endpoint is implemented, the UI remains in a safe non-submission stat
 - Confirm the favicon loads without 404s.
 - Confirm the early-access form does not silently store submissions in browser localStorage for production.
 - Confirm the site works correctly over HTTPS.
+
+The `/app` analyzer accepts YouTube URLs and local `.mp4`, `.mov`, `.webm`, or `.mkv` files. The local upload limit defaults to 2 GiB. If the backend sets a different `UPLOAD_MAX_BYTES`, set the same value in the frontend build as `VITE_MAX_UPLOAD_BYTES` so browser validation matches the server.

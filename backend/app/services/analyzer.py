@@ -23,13 +23,14 @@ def analyze_video(
     db,
     video_duration: float,
     transcript_segments: list[dict] | None = None,
+    frames_root: str | None = None,
 ):
 
     if transcript_segments is None:
         transcript_segments = []
 
     output_dir = os.path.join(
-        FRAMES_DIR,
+        frames_root or FRAMES_DIR,
         str(video_id),
     )
 

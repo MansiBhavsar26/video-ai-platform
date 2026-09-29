@@ -28,6 +28,20 @@ export function createYouTubeVideo(url) {
   return request(`/videos/youtube?url=${encodeURIComponent(url)}`, { method: 'POST' })
 }
 
+export function uploadVideo(file) {
+  const formData = new FormData()
+  formData.append('file', file)
+  return request('/videos/upload', { method: 'POST', body: formData })
+}
+
+export function startVideoAnalysis(videoId) {
+  return request(`/videos/${videoId}/analyze`, { method: 'POST' })
+}
+
+export function getVideoStatus(videoId) {
+  return request(`/videos/${videoId}/status`)
+}
+
 export function getTranscript(videoId) {
   return request(`/videos/${videoId}/transcript`)
 }

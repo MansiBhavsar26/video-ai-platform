@@ -6,6 +6,10 @@ from app.services.file_action_extractor import (
     extract_file_edit_actions,
 )
 
+from app.services.transcript_action_extractor import (
+    extract_transcript_actions,
+)
+
 
 def _action_key(action: dict) -> tuple:
     return (
@@ -28,8 +32,16 @@ def _action_to_step(action: dict, step_number: int) -> dict:
         instruction = f"{operation.capitalize()} {value}"
         name = value
         path = value
+    elif action.get("instruction"):
+        instruction = action["instruction"]
+        name = value
+        path = value
+    elif action_type == "install_dependency":
+        instruction = f"Install the {value} dependency."
+        name = value
+        path = None
     else:
-        instruction = f"Create {value}"
+        instruction = f"Create {value}."
         name = value
         path = value
 
@@ -69,9 +81,14 @@ def build_developer_action_timeline(
         segments
     )
 
+    transcript_actions = extract_transcript_actions(
+        segments
+    )
+
     actions = (
         command_actions
         + file_actions
+        + transcript_actions
     )
 
     unique_actions = []
