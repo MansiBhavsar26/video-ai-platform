@@ -8,6 +8,7 @@ from .config import (
     UPLOAD_DIR,
 )
 from .services.storage import get_local_storage
+from .services.analysis_recovery import schedule_interrupted_analysis_recovery
 
 from .database import Base, SessionLocal, engine
 from . import models
@@ -32,6 +33,13 @@ app = FastAPI(
     title="Video AI Platform",
     version="1.0.0",
 )
+
+
+@app.on_event("startup")
+async def recover_interrupted_video_analyses():
+    # Recovery runs in a retained background task, so startup can serve health
+    # and API requests while interrupted videos are retried sequentially.
+    schedule_interrupted_analysis_recovery(app)
 
 
 # CORS
