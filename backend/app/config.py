@@ -58,6 +58,22 @@ VIDEO_ANALYSIS_MAX_DURATION_SECONDS = max(
 )
 
 
+# Keep Faster-Whisper feature extraction bounded to at most a 30-second clip.
+VIDEO_TRANSCRIPTION_CHUNK_SECONDS = min(
+    30.0,
+    max(1.0, float(os.getenv("VIDEO_TRANSCRIPTION_CHUNK_SECONDS", "30"))),
+)
+
+VIDEO_TRANSCRIPTION_CHUNK_OVERLAP_SECONDS = max(
+    0.0,
+    min(
+        5.0,
+        VIDEO_TRANSCRIPTION_CHUNK_SECONDS / 2,
+        float(os.getenv("VIDEO_TRANSCRIPTION_CHUNK_OVERLAP_SECONDS", "2")),
+    ),
+)
+
+
 FRAMES_DIR = _configured_directory("FRAMES_DIR", BASE_DIR / "frames")
 
 

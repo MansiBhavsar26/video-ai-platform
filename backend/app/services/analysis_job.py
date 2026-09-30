@@ -76,6 +76,7 @@ def run_analysis_job(video_id: int):
                         transcript = transcribe_video(
                             local_video_path,
                             max_duration=VIDEO_ANALYSIS_MAX_DURATION_SECONDS,
+                            video_duration=video.duration,
                         )
                     except Exception:
                         release_transcription_model()

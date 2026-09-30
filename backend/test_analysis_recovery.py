@@ -283,8 +283,9 @@ def test_synthetic_video_four_recovers_and_rerun_replaces_results(
     monkeypatch.setattr(analysis_job, "get_local_storage", lambda: storage)
     lifecycle = []
 
-    def transcribe(path, *, max_duration):
+    def transcribe(path, *, max_duration, video_duration):
         assert max_duration == analysis_job.VIDEO_ANALYSIS_MAX_DURATION_SECONDS
+        assert video_duration == 2
         lifecycle.append("transcribe")
         return {
             "segments": [
@@ -414,7 +415,7 @@ def test_visual_failure_cleans_frames_but_retains_source(
     monkeypatch.setattr(
         analysis_job,
         "transcribe_video",
-        lambda path, *, max_duration: {"segments": []},
+        lambda path, *, max_duration, video_duration: {"segments": []},
     )
     monkeypatch.setattr(analysis_job, "release_transcription_model", lambda: None)
 

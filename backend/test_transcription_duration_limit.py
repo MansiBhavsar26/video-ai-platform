@@ -1,5 +1,3 @@
-from types import SimpleNamespace
-
 import pytest
 
 from app.services import transcription, video_processor
@@ -87,18 +85,17 @@ def test_transcription_rejects_invalid_max_duration_before_loading_model(
         transcription.transcribe_video("unused.mp4", max_duration=max_duration)
 
 
-def test_transcription_limits_whisper_clip_timestamps(monkeypatch):
-    observed = {}
+def test_transcription_fails_closed_for_unknown_video_duration(monkeypatch):
+    monkeypatch.setattr(
+        transcription,
+        "get_video_info",
+        lambda path: {"duration": float("nan")},
+    )
+    monkeypatch.setattr(
+        transcription,
+        "get_model",
+        lambda: pytest.fail("invalid duration reached Whisper"),
+    )
 
-    class FakeModel:
-        def transcribe(self, path, **options):
-            observed["path"] = path
-            observed["options"] = options
-            return iter(()), SimpleNamespace(language="en", language_probability=1.0)
-
-    monkeypatch.setattr(transcription, "get_model", lambda: FakeModel())
-
-    transcription.transcribe_video("video.mp4", max_duration=1800)
-
-    assert observed["path"] == "video.mp4"
-    assert observed["options"]["clip_timestamps"] == "0,1800.0"
+    with pytest.raises(video_processor.VideoDurationError):
+        transcription.transcribe_video("video.mp4", max_duration=1800)
