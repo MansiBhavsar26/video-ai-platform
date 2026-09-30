@@ -3,14 +3,14 @@ import re
 import cv2
 import pytesseract
 
-from ..config import TESSERACT_PATH
+from ..config import TESSERACT_PATH, VIDEO_ANALYSIS_MAX_FRAME_DIMENSION
 
 
 if TESSERACT_PATH:
     pytesseract.pytesseract.tesseract_cmd = TESSERACT_PATH
 
 
-OCR_MAX_DIMENSION = 1600
+OCR_MAX_DIMENSION = VIDEO_ANALYSIS_MAX_FRAME_DIMENSION
 OCR_TIMEOUT_SECONDS = 10
 
 

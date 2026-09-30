@@ -17,6 +17,20 @@ from .evidence_classifier import (
 from ..models import Detection
 
 
+OCR_FALLBACK_FRAME_INTERVAL = 3
+OCR_SCREEN_LABELS = {"tv", "laptop", "cell phone"}
+
+
+def _should_run_ocr(frame_index: int, detections: list[dict]) -> bool:
+    """OCR likely screen frames plus a periodic fallback when YOLO misses them."""
+    if frame_index % OCR_FALLBACK_FRAME_INTERVAL == 0:
+        return True
+    return any(
+        str(detection.get("label", "")).lower() in OCR_SCREEN_LABELS
+        for detection in detections
+    )
+
+
 def analyze_video(
     video_path: str,
     video_id: int,
@@ -50,7 +64,7 @@ def analyze_video(
     # --------------------------------------------------
 
     try:
-        for frame in frames:
+        for frame_index, frame in enumerate(frames):
             detections = detect_objects(frame["filepath"])
             for detection in detections:
                 timestamp = frame["timestamp"]
@@ -69,8 +83,11 @@ def analyze_video(
                 )
                 detection_count += 1
 
-            raw_text = extract_text(frame["filepath"])
-            text = clean_ocr_text(raw_text)
+            raw_text = ""
+            text = ""
+            if _should_run_ocr(frame_index, detections):
+                raw_text = extract_text(frame["filepath"])
+                text = clean_ocr_text(raw_text)
             if text:
                 evidence_type = classify_evidence(text)
                 ocr_results.append(

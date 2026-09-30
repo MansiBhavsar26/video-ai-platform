@@ -5,6 +5,7 @@ import cv2
 import numpy as np
 
 from app.services.smart_sampling import smart_sample_frames, smart_sample_video
+from app.services import video_processor
 
 
 def _make_frame(path, base_color=(0, 0, 0), stripe=False):
@@ -184,3 +185,15 @@ def test_smart_sampling_does_not_keep_large_in_memory_frame_arrays():
 
     assert all("frame" not in frame for frame in result)
     assert all("filepath" in frame and "timestamp" in frame for frame in result)
+
+
+def test_analysis_frames_are_written_with_configured_dimension_bound(tmp_path, monkeypatch):
+    source = np.full((80, 160, 3), 127, dtype=np.uint8)
+    frame_path = tmp_path / "bounded.jpg"
+    monkeypatch.setattr(video_processor, "VIDEO_ANALYSIS_MAX_FRAME_DIMENSION", 64)
+
+    video_processor.write_analysis_frame(source, str(frame_path))
+
+    written = cv2.imread(str(frame_path))
+    assert max(written.shape[:2]) == 64
+    assert source.shape[:2] == (80, 160)

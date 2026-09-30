@@ -41,13 +41,14 @@ def _add_video(
     status,
     source_type="upload",
     filepath=None,
+    duration=2,
 ):
     db = session_factory()
     video = Video(
         id=video_id,
         filename=f"video-{video_id}.mp4",
         filepath=filepath,
-        duration=2,
+        duration=duration,
         fps=24,
         status=status,
         source_type=source_type,
@@ -223,6 +224,43 @@ def test_missing_source_video_becomes_failed_not_stuck(
         db.close()
 
 
+@pytest.mark.parametrize("duration", [0, None, float("nan"), 1801])
+def test_recovery_rejects_unknown_duration_before_transcription(
+    recovery_db,
+    monkeypatch,
+    tmp_path,
+    duration,
+):
+    storage = LocalStorageBackend(tmp_path / "uploads", tmp_path / "frames")
+    source_path = storage.save_stream(
+        BytesIO(b"synthetic source"),
+        make_video_storage_key("unknown-duration", ".mp4"),
+    )
+    _add_video(
+        recovery_db,
+        video_id=52,
+        status="processing",
+        filepath=source_path,
+        duration=duration,
+    )
+    monkeypatch.setattr(analysis_job, "SessionLocal", recovery_db)
+    monkeypatch.setattr(analysis_job, "get_local_storage", lambda: storage)
+    monkeypatch.setattr(analysis_job.traceback, "print_exc", lambda: None)
+    monkeypatch.setattr(
+        analysis_job,
+        "transcribe_video",
+        lambda *args, **kwargs: pytest.fail("invalid duration reached transcription"),
+    )
+
+    analysis_job.run_analysis_job(52)
+
+    db = recovery_db()
+    try:
+        assert db.query(Video).filter(Video.id == 52).one().status == "failed"
+    finally:
+        db.close()
+
+
 def test_synthetic_video_four_recovers_and_rerun_replaces_results(
     recovery_db,
     monkeypatch,
@@ -245,7 +283,8 @@ def test_synthetic_video_four_recovers_and_rerun_replaces_results(
     monkeypatch.setattr(analysis_job, "get_local_storage", lambda: storage)
     lifecycle = []
 
-    def transcribe(path):
+    def transcribe(path, *, max_duration):
+        assert max_duration == analysis_job.VIDEO_ANALYSIS_MAX_DURATION_SECONDS
         lifecycle.append("transcribe")
         return {
             "segments": [
@@ -375,7 +414,7 @@ def test_visual_failure_cleans_frames_but_retains_source(
     monkeypatch.setattr(
         analysis_job,
         "transcribe_video",
-        lambda path: {"segments": []},
+        lambda path, *, max_duration: {"segments": []},
     )
     monkeypatch.setattr(analysis_job, "release_transcription_model", lambda: None)
 

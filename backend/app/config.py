@@ -48,7 +48,13 @@ PORT = int(os.getenv("PORT", "8000"))
 UPLOAD_DIR = _configured_directory("UPLOAD_DIR", BASE_DIR / "uploads")
 
 UPLOAD_MAX_BYTES = int(
-    os.getenv("UPLOAD_MAX_BYTES", str(2 * 1024 * 1024 * 1024))
+    os.getenv("UPLOAD_MAX_BYTES", str(200 * 1024 * 1024))
+)
+
+
+VIDEO_ANALYSIS_MAX_DURATION_SECONDS = max(
+    1.0,
+    float(os.getenv("VIDEO_ANALYSIS_MAX_DURATION_SECONDS", "1800")),
 )
 
 
@@ -114,7 +120,19 @@ SMART_SAMPLING_MIN_FRAME_GAP = float(
 
 VIDEO_ANALYSIS_MAX_FRAMES = max(
     1,
-    int(os.getenv("VIDEO_ANALYSIS_MAX_FRAMES", "60")),
+    int(os.getenv("VIDEO_ANALYSIS_MAX_FRAMES", "30")),
+)
+
+
+VIDEO_ANALYSIS_FRAME_ANALYSIS_INTERVAL_SECONDS = max(
+    0.1,
+    float(os.getenv("VIDEO_ANALYSIS_FRAME_ANALYSIS_INTERVAL_SECONDS", "10")),
+)
+
+
+VIDEO_ANALYSIS_MAX_FRAME_DIMENSION = max(
+    1,
+    int(os.getenv("VIDEO_ANALYSIS_MAX_FRAME_DIMENSION", "1280")),
 )
 
 

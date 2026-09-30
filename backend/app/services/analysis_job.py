@@ -4,6 +4,7 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session
 
+from ..config import VIDEO_ANALYSIS_MAX_DURATION_SECONDS
 from ..database import SessionLocal
 from ..models import Video, Detection
 from .analyzer import analyze_video
@@ -12,6 +13,7 @@ from .transcript_storage import save_transcript
 from .developer_action_pipeline import build_tutorial_steps
 from .tutorial_step_storage import save_tutorial_steps
 from .storage import StorageError, get_local_storage
+from .video_processor import validate_video_duration
 
 
 def run_analysis_job(video_id: int):
@@ -32,6 +34,11 @@ def run_analysis_job(video_id: int):
 
         print(
             f"Starting analysis for video {video_id}..."
+        )
+
+        validate_video_duration(
+            video.duration,
+            VIDEO_ANALYSIS_MAX_DURATION_SECONDS,
         )
 
         video.status = "processing"
@@ -58,39 +65,46 @@ def run_analysis_job(video_id: int):
         )
 
         storage = get_local_storage()
-        with storage.materialize(video.filepath) as local_video_path:
-            with storage.frame_workspace(video.id) as frames_root:
-                try:
-                    transcript = transcribe_video(local_video_path)
-                except Exception:
-                    release_transcription_model()
-                    raise
+        with storage.frame_workspace(video.id) as frames_root:
+            workspace = Path(frames_root) / str(video.id)
+            try:
+                # Remove frame leftovers from an interrupted/recovered attempt.
+                shutil.rmtree(workspace, ignore_errors=True)
+                workspace.mkdir(parents=True, exist_ok=True)
+                with storage.materialize(video.filepath) as local_video_path:
+                    try:
+                        transcript = transcribe_video(
+                            local_video_path,
+                            max_duration=VIDEO_ANALYSIS_MAX_DURATION_SECONDS,
+                        )
+                    except Exception:
+                        release_transcription_model()
+                        raise
 
-                try:
-                    transcript_segments = transcript["segments"]
+                    try:
+                        transcript_segments = transcript["segments"]
+
+                        print(
+                            f"Transcription completed. "
+                            f"Segments: {len(transcript_segments)}"
+                        )
+
+                        save_transcript(
+                            db=db,
+                            video_id=video.id,
+                            segments=transcript_segments,
+                        )
+                        print(f"Transcript saved for video {video_id}.")
+                    finally:
+                        release_transcription_model()
+
+                    # -------------------------------------------------
+                    # STEP 3: Analyze video
+                    # -------------------------------------------------
 
                     print(
-                        f"Transcription completed. "
-                        f"Segments: {len(transcript_segments)}"
+                        f"Running visual analysis for video {video_id}..."
                     )
-
-                    save_transcript(
-                        db=db,
-                        video_id=video.id,
-                        segments=transcript_segments,
-                    )
-                    print(f"Transcript saved for video {video_id}.")
-                finally:
-                    release_transcription_model()
-
-                # -------------------------------------------------
-                # STEP 3: Analyze video
-                # -------------------------------------------------
-
-                print(
-                    f"Running visual analysis for video {video_id}..."
-                )
-                try:
                     result = analyze_video(
                         video_path=local_video_path,
                         video_id=video.id,
@@ -99,11 +113,8 @@ def run_analysis_job(video_id: int):
                         transcript_segments=transcript_segments,
                         frames_root=frames_root,
                     )
-                finally:
-                    shutil.rmtree(
-                        Path(frames_root) / str(video.id),
-                        ignore_errors=True,
-                    )
+            finally:
+                shutil.rmtree(workspace, ignore_errors=True)
 
         video.description = result[
             "description"

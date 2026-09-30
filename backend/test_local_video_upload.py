@@ -97,10 +97,11 @@ def test_upload_rejects_invalid_files(tmp_path, monkeypatch, filename, content, 
 
 
 def test_upload_enforces_configured_size_limit(tmp_path, monkeypatch):
+    storage_initializations = []
     monkeypatch.setattr(
         videos,
         "get_local_storage",
-        lambda: LocalStorageBackend(tmp_path, tmp_path / "frames"),
+        lambda: storage_initializations.append(True),
     )
     monkeypatch.setattr(videos, "UPLOAD_MAX_BYTES", 4)
 
@@ -108,7 +109,90 @@ def test_upload_enforces_configured_size_limit(tmp_path, monkeypatch):
         videos.upload_video(_upload("tutorial.mp4", b"12345"), FakeDB())
 
     assert error.value.status_code == 413
+    assert "4 bytes" in error.value.detail
+    assert storage_initializations == []
     assert list((tmp_path / "videos").rglob("*")) == []
+
+
+def test_upload_rejects_over_duration_before_persistent_storage(tmp_path, monkeypatch):
+    storage_initializations = []
+    temporary_paths = []
+    monkeypatch.setattr(
+        videos,
+        "get_local_storage",
+        lambda: storage_initializations.append(True),
+    )
+    monkeypatch.setattr(videos, "UPLOAD_MAX_BYTES", 1024)
+    monkeypatch.setattr(videos, "VIDEO_ANALYSIS_MAX_DURATION_SECONDS", 30)
+
+    def get_video_info(path):
+        temporary_paths.append(Path(path))
+        return {"duration": 31, "fps": 30}
+
+    monkeypatch.setattr(videos, "get_video_info", get_video_info)
+    db = FakeDB()
+
+    with pytest.raises(HTTPException) as error:
+        videos.upload_video(_upload("tutorial.mp4", b"video"), db)
+
+    assert error.value.status_code == 422
+    assert "up to 1 minutes" in error.value.detail
+    assert storage_initializations == []
+    assert db.added == []
+    assert len(temporary_paths) == 1
+    assert not temporary_paths[0].exists()
+
+
+@pytest.mark.parametrize("duration", [0, None, float("nan"), float("inf"), "invalid"])
+def test_upload_rejects_unknown_or_invalid_duration(
+    tmp_path,
+    monkeypatch,
+    duration,
+):
+    storage_initializations = []
+    monkeypatch.setattr(
+        videos,
+        "get_local_storage",
+        lambda: storage_initializations.append(True),
+    )
+    monkeypatch.setattr(videos, "UPLOAD_MAX_BYTES", 1024)
+    monkeypatch.setattr(
+        videos,
+        "get_video_info",
+        lambda path: {"duration": duration, "fps": 30},
+    )
+
+    with pytest.raises(HTTPException) as error:
+        videos.upload_video(_upload("tutorial.mp4", b"video"), FakeDB())
+
+    assert error.value.status_code == 422
+    assert "duration could not be determined" in error.value.detail
+    assert "source" not in error.value.detail.lower()
+    assert storage_initializations == []
+
+
+def test_analyze_rejects_unknown_duration_before_scheduling(tmp_path, monkeypatch):
+    storage = LocalStorageBackend(tmp_path / "uploads", tmp_path / "frames")
+    filepath = storage.save_stream(
+        BytesIO(b"video"),
+        "videos/unknown-duration/source.mp4",
+    )
+    monkeypatch.setattr(videos, "get_local_storage", lambda: storage)
+    video = SimpleNamespace(
+        id=25,
+        status="uploaded",
+        filepath=filepath,
+        duration=0,
+    )
+    tasks = BackgroundTasks()
+
+    with pytest.raises(HTTPException) as error:
+        videos.analyze_uploaded_video(25, tasks, FakeVideoDB(video))
+
+    assert error.value.status_code == 422
+    assert "duration could not be determined" in error.value.detail
+    assert not tasks.tasks
+    assert video.status == "uploaded"
 
 
 def test_analyze_missing_local_video_returns_safe_reupload_message(tmp_path, monkeypatch):
@@ -132,3 +216,21 @@ def test_analyze_missing_local_video_returns_safe_reupload_message(tmp_path, mon
         "The uploaded video is no longer available. Please upload the video again."
     )
     assert video.status == "uploaded"
+
+
+def test_failed_video_status_reports_missing_source_without_path(tmp_path, monkeypatch):
+    storage = LocalStorageBackend(tmp_path / "uploads", tmp_path / "frames")
+    monkeypatch.setattr(videos, "get_local_storage", lambda: storage)
+    video = SimpleNamespace(
+        id=24,
+        status="failed",
+        filepath=str(tmp_path / "uploads" / "videos" / "private-path" / "source.mp4"),
+        duration=12,
+    )
+
+    result = videos.get_video_status(24, FakeVideoDB(video))
+
+    assert result["message"] == (
+        "The uploaded video is no longer available. Please upload the video again."
+    )
+    assert str(tmp_path) not in result["message"]

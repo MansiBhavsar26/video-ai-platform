@@ -171,3 +171,12 @@ def test_analyze_video_includes_developer_actions_and_fused_evidence(monkeypatch
     assert result["scene_changes"] == []
     assert result["description"] == "description"
     assert detector_releases == [True]
+
+
+def test_ocr_runs_periodically_and_on_detected_screen_frames():
+    assert analyzer._should_run_ocr(0, [])
+    assert not analyzer._should_run_ocr(1, [])
+    assert not analyzer._should_run_ocr(2, [{"label": "person"}])
+    assert analyzer._should_run_ocr(1, [{"label": "laptop"}])
+    assert analyzer._should_run_ocr(2, [{"label": "TV"}])
+    assert analyzer._should_run_ocr(2, [{"label": "cell phone"}])

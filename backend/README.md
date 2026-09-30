@@ -123,7 +123,7 @@ working directory:
 ```dotenv
 UPLOAD_DIR=./uploads
 FRAMES_DIR=./frames
-UPLOAD_MAX_BYTES=2147483648
+UPLOAD_MAX_BYTES=209715200
 ```
 
 The defaults are `backend/uploads` and `backend/frames`. The source video stays
@@ -151,9 +151,11 @@ public backend URL, for example `https://YOUR-BACKEND-DOMAIN`.
 
 ## Local video uploads
 
-The app accepts `.mp4`, `.mov`, `.webm`, and `.mkv` uploads. MP4 is the recommended format. `POST /videos/upload` accepts multipart form data in the `file` field, checks the media type, extension, empty-file condition, and configured size limit, then stores it under `UPLOAD_DIR` with a generated filename. `UPLOAD_MAX_BYTES` sets the limit in bytes and defaults to 2 GiB. The endpoint returns the created video ID and safe metadata, not its storage path.
+The app accepts `.mp4`, `.mov`, `.webm`, and `.mkv` uploads. MP4 is the recommended format. `POST /videos/upload` accepts multipart form data in the `file` field, checks the media type, extension, empty-file condition, and configured limits before saving to the configured storage backend. Non-YouTube media acquired through `POST /videos/url` uses the same byte and duration limits; YouTube continues through its transcript-only path. `UPLOAD_MAX_BYTES` sets the limit in bytes and defaults to 200 MiB. `VIDEO_ANALYSIS_MAX_DURATION_SECONDS` defaults to 1800 seconds (30 minutes). Files exceeding either limit are rejected before a persistent upload is created. The endpoint returns the created video ID and safe metadata, not its storage path.
 
-Start processing with `POST /videos/{video_id}/analyze`, then poll `GET /videos/{video_id}/status` until the status is `completed` or `failed`. Completed guides are available at `GET /videos/{video_id}/steps`. Upload analysis uses faster-whisper and the existing visual analysis services. Local development needs FFmpeg and writable upload/frame storage. On Render Free, both source videos and extracted frames use the ephemeral service filesystem and can disappear after restart or redeploy.
+Analysis is bounded for the Render Free 512 MB MVP: `VIDEO_ANALYSIS_MAX_FRAMES` defaults to 30 sampled frames, `VIDEO_ANALYSIS_FRAME_ANALYSIS_INTERVAL_SECONDS` defaults to 10 seconds, and `VIDEO_ANALYSIS_MAX_FRAME_DIMENSION` defaults to 1280 pixels. These can be lowered for a smaller memory budget. Whisper runs before visual analysis and is released before YOLO loads; OCR runs on likely screen/device frames and every third sampled frame as a fallback. YOLO uses the lightweight `yolo11n.pt` model and limits detections per frame. FFmpeg/OpenCV generated frames are temporary and cleaned after analysis, including failed jobs where the process remains alive. The original uploaded source is retained.
+
+Start processing with `POST /videos/{video_id}/analyze`, then poll `GET /videos/{video_id}/status` until the status is `completed` or `failed`. Completed guides are available at `GET /videos/{video_id}/steps`. Upload analysis uses faster-whisper and the existing visual analysis services. Local development needs FFmpeg and writable upload/frame storage. On Render Free, both source videos and extracted frames use the ephemeral service filesystem and can disappear after restart or redeploy. If a source is gone, status reports that it must be uploaded again; no persistent media service is configured by this MVP. PostgreSQL tutorial results remain stored.
 
 `VideoEvidence` rows currently come from cleaned OCR text found in sampled
 frames. They may be empty when the video has no legible screen text or OCR

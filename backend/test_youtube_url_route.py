@@ -154,8 +154,9 @@ def test_non_youtube_url_keeps_existing_acquisition_flow(monkeypatch, tmp_path):
     calls = []
     storage = LocalStorageBackend(tmp_path / "uploads", tmp_path / "frames")
 
-    def acquire(url):
+    def acquire(url, *, max_bytes):
         calls.append(url)
+        assert max_bytes == videos.UPLOAD_MAX_BYTES
         return {
             "filepath": str(filepath),
             "title": "sample",

@@ -17,7 +17,8 @@ const uploadStages = [
   ['guide', 'Generating implementation guide'],
 ]
 const acceptedExtensions = ['.mp4', '.mov', '.webm', '.mkv']
-const maxUploadBytes = Number(import.meta.env.VITE_MAX_UPLOAD_BYTES || 2 * 1024 * 1024 * 1024)
+const maxUploadBytes = Number(import.meta.env.VITE_MAX_UPLOAD_BYTES || 200 * 1024 * 1024)
+const maxUploadLabel = `${maxUploadBytes / (1024 * 1024)} MB`
 
 function formatTime(seconds) {
   const value = Number(seconds)
@@ -153,7 +154,7 @@ function AppPage() {
     const extension = `.${file.name.split('.').pop().toLowerCase()}`
     if (!acceptedExtensions.includes(extension)) { setError('Choose an MP4, MOV, WebM, or MKV video.'); setState('error'); return }
     if (file.size === 0) { setError('The selected video file is empty.'); setState('error'); return }
-    if (file.size > maxUploadBytes) { setError('The selected video exceeds the 2 GB upload limit.'); setState('error'); return }
+    if (file.size > maxUploadBytes) { setError(`The selected video exceeds the ${maxUploadLabel} upload limit.`); setState('error'); return }
     const mimeTypes = ['video/mp4', 'video/quicktime', 'video/webm', 'video/x-matroska', 'application/octet-stream']
     if (file.type && !mimeTypes.includes(file.type.toLowerCase())) { setError('The selected file is not a supported video type.'); setState('error'); return }
 
@@ -173,7 +174,7 @@ function AppPage() {
         const response = await getVideoStatus(video.id)
         status = response?.status
         if (status === 'completed') break
-        if (status === 'failed') throw new Error('Video analysis failed. Check the video and try again.')
+        if (status === 'failed') throw new Error(response?.message || 'Video analysis failed. Check the video and try again.')
         if (attempt % 10 === 9) setStage('actions')
       }
       if (status !== 'completed') throw new Error('Video analysis timed out. Please try again later.')

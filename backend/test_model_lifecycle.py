@@ -69,7 +69,7 @@ def test_render_mvp_uses_tiny_whisper_model():
     assert transcription.MODEL_SIZE == "tiny"
 
 
-def test_default_video_frame_limit_is_60():
+def test_default_video_frame_limit_is_30():
     assert config.VIDEO_ANALYSIS_MAX_FRAMES == int(
-        os.getenv("VIDEO_ANALYSIS_MAX_FRAMES", "60")
+        os.getenv("VIDEO_ANALYSIS_MAX_FRAMES", "30")
     )

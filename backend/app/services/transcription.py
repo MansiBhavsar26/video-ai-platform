@@ -1,5 +1,6 @@
 from faster_whisper import WhisperModel
 import gc
+import math
 
 
 MODEL_SIZE = "tiny"
@@ -35,8 +36,15 @@ def release_model():
 
 def transcribe_video(
     video_path: str,
-    max_duration: float | None = None,
+    max_duration: float,
 ):
+    try:
+        max_duration = float(max_duration)
+    except (TypeError, ValueError, OverflowError) as error:
+        raise ValueError("A valid maximum transcription duration is required.") from error
+    if not math.isfinite(max_duration) or max_duration <= 0:
+        raise ValueError("A valid maximum transcription duration is required.")
+
     model = get_model()
 
     transcribe_options = {
@@ -44,10 +52,7 @@ def transcribe_video(
         "vad_filter": True,
     }
 
-    if max_duration is not None:
-        transcribe_options[
-            "clip_timestamps"
-        ] = f"0,{max_duration}"
+    transcribe_options["clip_timestamps"] = f"0,{max_duration}"
 
     segments, info = model.transcribe(
         video_path,

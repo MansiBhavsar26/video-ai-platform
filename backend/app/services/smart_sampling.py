@@ -11,10 +11,11 @@ from app.config import (
     SMART_SAMPLING_REFINEMENT_INTERVAL,
     SMART_SAMPLING_REFINEMENT_WINDOW,
     SMART_SAMPLING_VISUAL_THRESHOLD,
+    VIDEO_ANALYSIS_FRAME_ANALYSIS_INTERVAL_SECONDS,
     VIDEO_ANALYSIS_MAX_FRAMES,
 )
 
-from .video_processor import extract_frames
+from .video_processor import extract_frames, write_analysis_frame
 
 
 def _normalize_frames(
@@ -210,7 +211,7 @@ def _extract_window_frames(
                     output_dir,
                     f"frame_{actual_timestamp:.3f}.jpg",
                 )
-                cv2.imwrite(filepath, frame)
+                write_analysis_frame(frame, filepath)
                 window_frames.append(
                     {
                         "filepath": filepath,
@@ -307,16 +308,26 @@ def smart_sample_video(
     min_frame_gap_seconds: float = SMART_SAMPLING_MIN_FRAME_GAP,
     enabled: bool = SMART_SAMPLING_ENABLED,
     max_frames: int = VIDEO_ANALYSIS_MAX_FRAMES,
+    frame_analysis_interval_seconds: float = VIDEO_ANALYSIS_FRAME_ANALYSIS_INTERVAL_SECONDS,
 ) -> list[dict[str, Any]]:
     """Use a coarse-to-fine seek-based sampling strategy and keep every returned frame under output_dir."""
 
     os.makedirs(output_dir, exist_ok=True)
+    max_frames = max(1, int(max_frames))
+    coarse_interval_seconds = max(
+        float(coarse_interval_seconds),
+        float(frame_analysis_interval_seconds),
+    )
+    min_frame_gap_seconds = max(
+        float(min_frame_gap_seconds),
+        float(frame_analysis_interval_seconds),
+    )
 
     if not enabled:
         return extract_frames(
             video_path=video_path,
             output_dir=output_dir,
-            interval_seconds=1.0,
+            interval_seconds=coarse_interval_seconds,
             max_frames=max_frames,
         )
 
@@ -367,7 +378,10 @@ def smart_sample_video(
                 output_dir=window_dir,
                 start_time=window_start,
                 end_time=window_end,
-                interval_seconds=refinement_interval_seconds,
+                interval_seconds=max(
+                    refinement_interval_seconds,
+                    frame_analysis_interval_seconds,
+                ),
                 max_frames=8,
             )
 
