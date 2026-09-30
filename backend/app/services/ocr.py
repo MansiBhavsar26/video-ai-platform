@@ -80,34 +80,29 @@ def extract_text(image_path: str) -> str:
     if image is None:
         return ""
 
-    image = resize_for_ocr(image)
-
-    gray = cv2.cvtColor(
-        image,
-        cv2.COLOR_BGR2GRAY,
-    )
-
-    processed = cv2.threshold(
-        gray,
-        0,
-        255,
-        cv2.THRESH_BINARY + cv2.THRESH_OTSU,
-    )[1]
-
+    gray = processed = None
     try:
-        data = pytesseract.image_to_data(
-            processed,
-            lang="eng",
-            config="--psm 11",
-            output_type=pytesseract.Output.DICT,
-            timeout=OCR_TIMEOUT_SECONDS,
-        )
-
-    except RuntimeError as error:
-        print(
-            f"OCR timed out for {image_path}: {error}"
-        )
-        return ""
+        image = resize_for_ocr(image)
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        processed = cv2.threshold(
+            gray,
+            0,
+            255,
+            cv2.THRESH_BINARY + cv2.THRESH_OTSU,
+        )[1]
+        try:
+            data = pytesseract.image_to_data(
+                processed,
+                lang="eng",
+                config="--psm 11",
+                output_type=pytesseract.Output.DICT,
+                timeout=OCR_TIMEOUT_SECONDS,
+            )
+        except RuntimeError as error:
+            print(f"OCR timed out for {image_path}: {error}")
+            return ""
+    finally:
+        del image, gray, processed
 
     lines = {}
 

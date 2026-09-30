@@ -112,6 +112,15 @@ SMART_SAMPLING_MIN_FRAME_GAP = float(
 )
 
 
+VIDEO_ANALYSIS_MAX_FRAMES = max(
+    1,
+    int(os.getenv("VIDEO_ANALYSIS_MAX_FRAMES", "60")),
+)
+
+
+YOLO_MAX_DETECTIONS = 100
+
+
 CORS_ORIGINS = [
     origin.strip()
     for origin in os.getenv(

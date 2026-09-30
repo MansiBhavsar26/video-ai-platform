@@ -45,6 +45,7 @@ def test_analyze_video_includes_developer_actions_and_fused_evidence(monkeypatch
     ]
 
     captured = {}
+    detector_releases = []
 
     def fake_build_developer_action_timeline(segments):
         captured["segments"] = segments
@@ -67,6 +68,11 @@ def test_analyze_video_includes_developer_actions_and_fused_evidence(monkeypatch
         analyzer,
         "smart_sample_video",
         lambda video_path, output_dir: frames,
+    )
+    monkeypatch.setattr(
+        analyzer,
+        "release_detector_model",
+        lambda: detector_releases.append(True),
     )
     monkeypatch.setattr(
         analyzer,
@@ -164,3 +170,4 @@ def test_analyze_video_includes_developer_actions_and_fused_evidence(monkeypatch
     assert result["timeline"] == [{"timestamp": 1.0}]
     assert result["scene_changes"] == []
     assert result["description"] == "description"
+    assert detector_releases == [True]

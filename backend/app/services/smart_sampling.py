@@ -11,6 +11,7 @@ from app.config import (
     SMART_SAMPLING_REFINEMENT_INTERVAL,
     SMART_SAMPLING_REFINEMENT_WINDOW,
     SMART_SAMPLING_VISUAL_THRESHOLD,
+    VIDEO_ANALYSIS_MAX_FRAMES,
 )
 
 from .video_processor import extract_frames
@@ -151,6 +152,7 @@ def _extract_window_frames(
     start_time: float,
     end_time: float,
     interval_seconds: float,
+    max_frames: int | None = None,
 ) -> list[dict[str, Any]]:
     """Sample a time window using the same seek-based mechanism as the base extractor."""
 
@@ -163,54 +165,65 @@ def _extract_window_frames(
     cap = cv2.VideoCapture(video_path)
 
     if not cap.isOpened():
+        cap.release()
         raise ValueError("Could not open video")
 
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
-
-    if fps <= 0:
-        cap.release()
-        raise ValueError("Could not determine video FPS")
-
-    duration = frame_count / fps if frame_count > 0 else 0.0
-    if duration <= 0:
-        cap.release()
-        return []
-
     window_frames: list[dict[str, Any]] = []
-    timestamp = max(0.0, float(start_time))
 
-    while timestamp <= float(end_time):
-        cap.set(cv2.CAP_PROP_POS_MSEC, timestamp * 1000.0)
-        success, frame = cap.read()
+    try:
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+        if fps <= 0:
+            raise ValueError("Could not determine video FPS")
 
-        if success:
-            actual_frame_index = cap.get(cv2.CAP_PROP_POS_FRAMES) - 1
-            actual_timestamp = actual_frame_index / fps
+        duration = frame_count / fps if frame_count > 0 else 0.0
+        if duration <= 0:
+            return []
 
-            if actual_timestamp < start_time:
-                timestamp += interval_seconds
-                continue
-
-            if actual_timestamp > end_time:
-                break
-
-            filepath = os.path.join(
-                output_dir,
-                f"frame_{actual_timestamp:.3f}.jpg",
-            )
-            cv2.imwrite(filepath, frame)
-            window_frames.append(
-                {
-                    "filepath": filepath,
-                    "timestamp": float(actual_timestamp),
-                }
+        if max_frames is not None and max_frames > 0:
+            interval_seconds = max(
+                interval_seconds,
+                max((float(end_time) - float(start_time)), 0.0) / max_frames,
             )
 
-        timestamp += interval_seconds
+        timestamp = max(0.0, float(start_time))
+        while timestamp <= float(end_time) and (
+            max_frames is None or len(window_frames) < max_frames
+        ):
+            cap.set(cv2.CAP_PROP_POS_MSEC, timestamp * 1000.0)
+            success, frame = cap.read()
 
-    cap.release()
-    return _normalize_frames(window_frames)
+            if success:
+                actual_frame_index = cap.get(cv2.CAP_PROP_POS_FRAMES) - 1
+                actual_timestamp = actual_frame_index / fps
+
+                if actual_timestamp < start_time:
+                    del frame
+                    timestamp += interval_seconds
+                    continue
+
+                if actual_timestamp > end_time:
+                    del frame
+                    break
+
+                filepath = os.path.join(
+                    output_dir,
+                    f"frame_{actual_timestamp:.3f}.jpg",
+                )
+                cv2.imwrite(filepath, frame)
+                window_frames.append(
+                    {
+                        "filepath": filepath,
+                        "timestamp": float(actual_timestamp),
+                    }
+                )
+                del frame
+
+            timestamp += interval_seconds
+
+        return _normalize_frames(window_frames)
+    finally:
+        cap.release()
 
 
 def smart_sample_frames(
@@ -293,6 +306,7 @@ def smart_sample_video(
     refinement_interval_seconds: float = SMART_SAMPLING_REFINEMENT_INTERVAL,
     min_frame_gap_seconds: float = SMART_SAMPLING_MIN_FRAME_GAP,
     enabled: bool = SMART_SAMPLING_ENABLED,
+    max_frames: int = VIDEO_ANALYSIS_MAX_FRAMES,
 ) -> list[dict[str, Any]]:
     """Use a coarse-to-fine seek-based sampling strategy and keep every returned frame under output_dir."""
 
@@ -303,6 +317,7 @@ def smart_sample_video(
             video_path=video_path,
             output_dir=output_dir,
             interval_seconds=1.0,
+            max_frames=max_frames,
         )
 
     smart_dir = os.path.join(output_dir, "smart")
@@ -318,6 +333,7 @@ def smart_sample_video(
         video_path=video_path,
         output_dir=coarse_dir,
         interval_seconds=coarse_interval_seconds,
+        max_frames=max_frames,
     )
 
     if not coarse_frames:
@@ -337,7 +353,8 @@ def smart_sample_video(
     )
 
     if change_timestamps:
-        for change_timestamp in change_timestamps:
+        # Bound refinement work even when a long screen recording changes often.
+        for change_timestamp in change_timestamps[:12]:
             window_start = max(0.0, change_timestamp - refinement_window_seconds)
             window_end = change_timestamp + refinement_window_seconds
             window_dir = os.path.join(
@@ -351,6 +368,7 @@ def smart_sample_video(
                 start_time=window_start,
                 end_time=window_end,
                 interval_seconds=refinement_interval_seconds,
+                max_frames=8,
             )
 
             for frame in refined_window:
@@ -363,6 +381,16 @@ def smart_sample_video(
         sorted(selected_by_timestamp.values(), key=lambda item: item["timestamp"]),
         min_frame_gap_seconds,
     )
+
+    if len(result) > max_frames:
+        if max_frames == 1:
+            result = [result[0]]
+        else:
+            last_index = len(result) - 1
+            result = [
+                result[round(index * last_index / (max_frames - 1))]
+                for index in range(max_frames)
+            ]
 
     persistent_frames: list[dict[str, Any]] = []
 

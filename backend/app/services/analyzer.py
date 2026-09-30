@@ -2,7 +2,7 @@ import os
 
 from ..config import FRAMES_DIR
 from .smart_sampling import smart_sample_video
-from .detector import detect_objects
+from .detector import detect_objects, release_model as release_detector_model
 from .ocr import extract_text
 from .ocr_cleaner import clean_ocr_text
 from .vision import generate_video_description
@@ -49,76 +49,43 @@ def analyze_video(
     # Analyze every frame
     # --------------------------------------------------
 
-    for frame in frames:
-
-        # ==================================================
-        # YOLO OBJECT DETECTION
-        # ==================================================
-
-        detections = detect_objects(
-            frame["filepath"]
-        )
-
-        for detection in detections:
-
-            all_detections.append(
-                {
-                    **detection,
-                    "timestamp": frame["timestamp"],
-                }
-            )
-
-            db_detection = Detection(
-                video_id=video_id,
-                timestamp=frame["timestamp"],
-                label=detection["label"],
-                confidence=detection["confidence"],
-                x1=detection["x1"],
-                y1=detection["y1"],
-                x2=detection["x2"],
-                y2=detection["y2"],
-            )
-
-            db.add(
-                db_detection
-            )
-
-            detection_count += 1
-
-        # ==================================================
-        # OCR TEXT DETECTION
-        # ==================================================
-
-        raw_text = extract_text(
-            frame["filepath"]
-        )
-
-        text = clean_ocr_text(
-            raw_text
-        )
-
-        if text:
-            evidence_type = classify_evidence(
-                text
-            )
-
-            evidence_confidence = (
-                get_evidence_confidence(
-                    evidence_type
+    try:
+        for frame in frames:
+            detections = detect_objects(frame["filepath"])
+            for detection in detections:
+                timestamp = frame["timestamp"]
+                all_detections.append({**detection, "timestamp": timestamp})
+                db.add(
+                    Detection(
+                        video_id=video_id,
+                        timestamp=timestamp,
+                        label=detection["label"],
+                        confidence=detection["confidence"],
+                        x1=detection["x1"],
+                        y1=detection["y1"],
+                        x2=detection["x2"],
+                        y2=detection["y2"],
+                    )
                 )
-            )
+                detection_count += 1
 
+            raw_text = extract_text(frame["filepath"])
+            text = clean_ocr_text(raw_text)
+            if text:
+                evidence_type = classify_evidence(text)
+                ocr_results.append(
+                    {
+                        "timestamp": frame["timestamp"],
+                        "text": text,
+                        "evidence_type": evidence_type,
+                        "source": "video_frame",
+                        "confidence": get_evidence_confidence(evidence_type),
+                    }
+                )
 
-
-            ocr_results.append(
-                {
-                    "timestamp": frame["timestamp"],
-                    "text": text,
-                    "evidence_type": evidence_type,
-                    "source": "video_frame",
-                    "confidence": evidence_confidence,
-                }
-            )
+            del detections, raw_text, text
+    finally:
+        release_detector_model()
 
     object_summary = aggregate_detections(all_detections)
     scene_changes = detect_scene_changes(frames)

@@ -1,6 +1,7 @@
 import asyncio
 import time
 from io import BytesIO
+from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine
@@ -242,17 +243,39 @@ def test_synthetic_video_four_recovers_and_rerun_replaces_results(
     monkeypatch.setattr(analysis_recovery, "SessionLocal", recovery_db)
     monkeypatch.setattr(analysis_job, "SessionLocal", recovery_db)
     monkeypatch.setattr(analysis_job, "get_local_storage", lambda: storage)
-    monkeypatch.setattr(
-        analysis_job,
-        "transcribe_video",
-        lambda path: {
+    lifecycle = []
+
+    def transcribe(path):
+        lifecycle.append("transcribe")
+        return {
             "segments": [
                 {"start_time": 0.0, "end_time": 1.0, "text": "Run npm install."}
             ]
-        },
+        }
+
+    def release_transcriber():
+        db = recovery_db()
+        try:
+            assert db.query(TranscriptSegment).filter(
+                TranscriptSegment.video_id == 4
+            ).count() == 1
+        finally:
+            db.close()
+        lifecycle.append("whisper_released")
+
+    monkeypatch.setattr(analysis_job, "transcribe_video", transcribe)
+    monkeypatch.setattr(
+        analysis_job,
+        "release_transcription_model",
+        release_transcriber,
     )
 
     def deterministic_visual_analysis(video_path, video_id, db, **kwargs):
+        assert lifecycle[-1] == "whisper_released"
+        lifecycle.append("visual_analysis")
+        temporary_frame = Path(kwargs["frames_root"]) / str(video_id) / "sample.jpg"
+        temporary_frame.parent.mkdir(parents=True, exist_ok=True)
+        temporary_frame.write_bytes(b"generated frame")
         db.add(
             Detection(
                 video_id=video_id,
@@ -296,6 +319,11 @@ def test_synthetic_video_four_recovers_and_rerun_replaces_results(
         await main.app.state.analysis_recovery_task
 
     asyncio.run(simulate_restart())
+    assert lifecycle == [
+        "transcribe", "whisper_released", "visual_analysis"
+    ]
+    assert Path(video_path).is_file()
+    assert not (storage.frames_dir / "4").exists()
 
     db = recovery_db()
     try:
@@ -307,6 +335,12 @@ def test_synthetic_video_four_recovers_and_rerun_replaces_results(
     # not duplicate, each persisted result type.
     awaitable = run_in_threadpool(analysis_job.run_analysis_job, 4)
     asyncio.run(awaitable)
+    assert lifecycle == [
+        "transcribe", "whisper_released", "visual_analysis",
+        "transcribe", "whisper_released", "visual_analysis",
+    ]
+    assert Path(video_path).is_file()
+    assert not (storage.frames_dir / "4").exists()
 
     db = recovery_db()
     try:
@@ -317,3 +351,49 @@ def test_synthetic_video_four_recovers_and_rerun_replaces_results(
         assert db.query(TutorialStep).filter(TutorialStep.video_id == 4).count() == 1
     finally:
         db.close()
+
+
+def test_visual_failure_cleans_frames_but_retains_source(
+    recovery_db,
+    monkeypatch,
+    tmp_path,
+):
+    storage = LocalStorageBackend(tmp_path / "uploads", tmp_path / "frames")
+    video_path = storage.save_stream(
+        BytesIO(b"synthetic source"),
+        make_video_storage_key("visual-failure", ".mp4"),
+    )
+    _add_video(
+        recovery_db,
+        video_id=45,
+        status="processing",
+        source_type="upload",
+        filepath=video_path,
+    )
+    monkeypatch.setattr(analysis_job, "SessionLocal", recovery_db)
+    monkeypatch.setattr(analysis_job, "get_local_storage", lambda: storage)
+    monkeypatch.setattr(
+        analysis_job,
+        "transcribe_video",
+        lambda path: {"segments": []},
+    )
+    monkeypatch.setattr(analysis_job, "release_transcription_model", lambda: None)
+
+    def fail_visual_analysis(video_path, video_id, db, **kwargs):
+        frame = Path(kwargs["frames_root"]) / str(video_id) / "partial.jpg"
+        frame.parent.mkdir(parents=True, exist_ok=True)
+        frame.write_bytes(b"partial output")
+        raise RuntimeError("synthetic visual failure")
+
+    monkeypatch.setattr(analysis_job, "analyze_video", fail_visual_analysis)
+
+    analysis_job.run_analysis_job(45)
+
+    db = recovery_db()
+    try:
+        assert db.query(Video).filter(Video.id == 45).one().status == "failed"
+    finally:
+        db.close()
+
+    assert Path(video_path).is_file()
+    assert not (storage.frames_dir / "45").exists()

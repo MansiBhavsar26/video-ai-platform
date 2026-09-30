@@ -1,11 +1,13 @@
 import traceback
+import shutil
+from pathlib import Path
 
 from sqlalchemy.orm import Session
 
 from ..database import SessionLocal
 from ..models import Video, Detection
 from .analyzer import analyze_video
-from .transcription import transcribe_video
+from .transcription import transcribe_video, release_model as release_transcription_model
 from .transcript_storage import save_transcript
 from .developer_action_pipeline import build_tutorial_steps
 from .tutorial_step_storage import save_tutorial_steps
@@ -58,14 +60,28 @@ def run_analysis_job(video_id: int):
         storage = get_local_storage()
         with storage.materialize(video.filepath) as local_video_path:
             with storage.frame_workspace(video.id) as frames_root:
-                transcript = transcribe_video(local_video_path)
+                try:
+                    transcript = transcribe_video(local_video_path)
+                except Exception:
+                    release_transcription_model()
+                    raise
 
-                transcript_segments = transcript["segments"]
+                try:
+                    transcript_segments = transcript["segments"]
 
-                print(
-                    f"Transcription completed. "
-                    f"Segments: {len(transcript_segments)}"
-                )
+                    print(
+                        f"Transcription completed. "
+                        f"Segments: {len(transcript_segments)}"
+                    )
+
+                    save_transcript(
+                        db=db,
+                        video_id=video.id,
+                        segments=transcript_segments,
+                    )
+                    print(f"Transcript saved for video {video_id}.")
+                finally:
+                    release_transcription_model()
 
                 # -------------------------------------------------
                 # STEP 3: Analyze video
@@ -74,15 +90,20 @@ def run_analysis_job(video_id: int):
                 print(
                     f"Running visual analysis for video {video_id}..."
                 )
-
-                result = analyze_video(
-                    video_path=local_video_path,
-                    video_id=video.id,
-                    db=db,
-                    video_duration=video.duration or 0,
-                    transcript_segments=transcript_segments,
-                    frames_root=frames_root,
-                )
+                try:
+                    result = analyze_video(
+                        video_path=local_video_path,
+                        video_id=video.id,
+                        db=db,
+                        video_duration=video.duration or 0,
+                        transcript_segments=transcript_segments,
+                        frames_root=frames_root,
+                    )
+                finally:
+                    shutil.rmtree(
+                        Path(frames_root) / str(video.id),
+                        ignore_errors=True,
+                    )
 
         video.description = result[
             "description"
@@ -95,21 +116,7 @@ def run_analysis_job(video_id: int):
         )
 
         # -------------------------------------------------
-        # STEP 4: Save transcript
-        # -------------------------------------------------
-
-        save_transcript(
-            db=db,
-            video_id=video.id,
-            segments=transcript_segments,
-        )
-
-        print(
-            f"Transcript saved for video {video_id}."
-        )
-
-        # -------------------------------------------------
-        # STEP 5: Extract tutorial steps
+        # STEP 4: Extract tutorial steps
         # -------------------------------------------------
 
         print(
@@ -127,7 +134,7 @@ def run_analysis_job(video_id: int):
         )
 
         # -------------------------------------------------
-        # STEP 6: Save tutorial steps
+        # STEP 5: Save tutorial steps
         # -------------------------------------------------
 
         save_tutorial_steps(
@@ -141,7 +148,7 @@ def run_analysis_job(video_id: int):
         )
 
         # -------------------------------------------------
-        # STEP 7: Mark analysis completed
+        # STEP 6: Mark analysis completed
         # -------------------------------------------------
 
         video.status = "completed"

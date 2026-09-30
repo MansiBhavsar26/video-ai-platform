@@ -140,6 +140,26 @@ def test_smart_sampling_video_returns_persistent_frames_under_output_dir(tmp_pat
     assert timestamps == sorted(timestamps)
 
 
+def test_smart_sampling_respects_frame_memory_limit(tmp_path):
+    video_path = tmp_path / "bounded.mp4"
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    writer = cv2.VideoWriter(str(video_path), fourcc, 10, (64, 48))
+    try:
+        for index in range(300):
+            writer.write(np.full((48, 64, 3), index % 255, dtype=np.uint8))
+    finally:
+        writer.release()
+
+    frames = smart_sample_video(
+        str(video_path),
+        str(tmp_path / "bounded-frames"),
+        coarse_interval_seconds=1,
+        max_frames=4,
+    )
+
+    assert 0 < len(frames) <= 4
+
+
 def test_smart_sampling_removes_duplicate_timestamps_and_sorts_them():
     frames = [
         {"filepath": "b.jpg", "timestamp": 10.0},
