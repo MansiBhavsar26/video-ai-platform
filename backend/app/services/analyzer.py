@@ -1,3 +1,4 @@
+import logging
 import os
 
 from ..config import FRAMES_DIR
@@ -19,6 +20,15 @@ from ..models import Detection
 
 OCR_FALLBACK_FRAME_INTERVAL = 3
 OCR_SCREEN_LABELS = {"tv", "laptop", "cell phone"}
+logger = logging.getLogger(__name__)
+
+
+def _extract_ocr_text_safely(frame_path: str) -> str:
+    try:
+        return extract_text(frame_path)
+    except Exception:
+        logger.warning("OCR failed for a frame; continuing without OCR.")
+        return ""
 
 
 def _should_run_ocr(frame_index: int, detections: list[dict]) -> bool:
@@ -86,7 +96,7 @@ def analyze_video(
             raw_text = ""
             text = ""
             if _should_run_ocr(frame_index, detections):
-                raw_text = extract_text(frame["filepath"])
+                raw_text = _extract_ocr_text_safely(frame["filepath"])
                 text = clean_ocr_text(raw_text)
             if text:
                 evidence_type = classify_evidence(text)

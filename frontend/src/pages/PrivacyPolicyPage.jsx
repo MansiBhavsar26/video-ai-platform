@@ -23,7 +23,7 @@ function PrivacyPolicyPage() {
             <p className="section-kicker">Privacy Policy</p>
             <h2>Privacy policy</h2>
             <p className="section-copy" style={{ marginTop: '18px' }}>
-              Effective date: <strong>To be confirmed</strong>
+              <strong>Draft for owner review. This page is not a final privacy policy.</strong>
             </p>
           </div>
 
@@ -31,57 +31,50 @@ function PrivacyPolicyPage() {
             <div className="guide-header">
               <div>
                 <p className="guide-label">Overview</p>
-                <h3>How we handle early-access signup information</h3>
+                <h3>Current information handling in this MVP</h3>
               </div>
             </div>
 
             <div className="guide-step-body" style={{ padding: '22px 22px 10px' }}>
               <div className="implementation-card" style={{ marginBottom: '14px' }}>
                 <div className="implementation-line">
-                  <span className="implementation-label">Information collected</span>
-                  <span>Name and email address provided through the early-access form.</span>
+                  <span className="implementation-label">Early access</span>
+                  <span>The signup endpoint stores the submitted name and email address in the application database. The form requires a contact checkbox, but its selection is not stored as a separate consent record.</span>
                 </div>
               </div>
 
               <div className="implementation-card" style={{ marginBottom: '14px' }}>
                 <div className="implementation-line">
-                  <span className="implementation-label">Purpose</span>
-                  <span>To manage early-access signups, communicate launch updates, and contact you about access or product news.</span>
+                  <span className="implementation-label">Video analysis</span>
+                  <span>For local uploads, the backend stores the source video on its configured filesystem and stores video metadata, transcript segments, detections, evidence, and tutorial steps in the application database. The source file may be temporary on deployments with an ephemeral filesystem.</span>
                 </div>
               </div>
 
               <div className="implementation-card" style={{ marginBottom: '14px' }}>
                 <div className="implementation-line">
-                  <span className="implementation-label">Storage</span>
-                  <span>Data is stored in a backend system only when the public API endpoint is connected. This frontend does not use browser localStorage as the final production storage mechanism.</span>
+                  <span className="implementation-label">YouTube URLs</span>
+                  <span>The application stores the YouTube URL and analysis results in its database. Transcript retrieval uses the configured transcript provider or the local fallback. The service providers, data locations, and applicable retention details still require owner confirmation.</span>
                 </div>
               </div>
 
               <div className="implementation-card" style={{ marginBottom: '14px' }}>
                 <div className="implementation-line">
-                  <span className="implementation-label">Retention</span>
-                  <span>Data is retained only as long as necessary to support early-access communication, launch updates, or as required by applicable retention practices.</span>
+                  <span className="implementation-label">Retention and deletion</span>
+                  <span>This MVP does not define a complete retention schedule or self-service deletion process. The responsible owner must confirm retention periods and a working request channel before launch.</span>
                 </div>
               </div>
 
               <div className="implementation-card" style={{ marginBottom: '14px' }}>
                 <div className="implementation-line">
-                  <span className="implementation-label">Deletion</span>
-                  <span>If you want your information removed or updated, contact the team at <strong>hello@videomind.in</strong> or the designated support address once confirmed by the product owner.</span>
+                  <span className="implementation-label">Owner confirmation required</span>
+                  <span>Before publication, confirm the responsible legal entity, effective date, privacy contact, retention and deletion process, hosting and transcript providers, and jurisdictions relevant to users. No legal entity, contact address, or retention period is asserted here.</span>
                 </div>
               </div>
 
               <div className="implementation-card" style={{ marginBottom: '14px' }}>
                 <div className="implementation-line">
-                  <span className="implementation-label">Contact</span>
-                  <span>For privacy questions, use the placeholder contact email: <strong>privacy@videomind.in</strong> (replace with the official address before launch).</span>
-                </div>
-              </div>
-
-              <div className="implementation-card" style={{ marginBottom: '14px' }}>
-                <div className="implementation-line">
-                  <span className="implementation-label">Notes</span>
-                  <span>This page is a launch placeholder. Final legal review should confirm the final company name, contact address, retention policy, and jurisdiction-specific requirements before public launch.</span>
+                  <span className="implementation-label">Scope</span>
+                  <span>This summary describes behavior found in the current repository and is provided for product-owner review. It is not legal advice or a statement that all production providers have been verified.</span>
                 </div>
               </div>
             </div>

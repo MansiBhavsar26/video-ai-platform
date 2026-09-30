@@ -1,3 +1,4 @@
+import logging
 import re
 
 import cv2
@@ -12,6 +13,7 @@ if TESSERACT_PATH:
 
 OCR_MAX_DIMENSION = VIDEO_ANALYSIS_MAX_FRAME_DIMENSION
 OCR_TIMEOUT_SECONDS = 10
+logger = logging.getLogger(__name__)
 
 
 def resize_for_ocr(image):
@@ -75,6 +77,14 @@ def is_reasonable_text(text: str) -> bool:
 
 
 def extract_text(image_path: str) -> str:
+    try:
+        return _extract_text(image_path)
+    except Exception:
+        logger.warning("OCR is unavailable or failed; continuing without OCR.")
+        return ""
+
+
+def _extract_text(image_path: str) -> str:
     image = cv2.imread(image_path)
 
     if image is None:
@@ -90,17 +100,13 @@ def extract_text(image_path: str) -> str:
             255,
             cv2.THRESH_BINARY + cv2.THRESH_OTSU,
         )[1]
-        try:
-            data = pytesseract.image_to_data(
-                processed,
-                lang="eng",
-                config="--psm 11",
-                output_type=pytesseract.Output.DICT,
-                timeout=OCR_TIMEOUT_SECONDS,
-            )
-        except RuntimeError as error:
-            print(f"OCR timed out for {image_path}: {error}")
-            return ""
+        data = pytesseract.image_to_data(
+            processed,
+            lang="eng",
+            config="--psm 11",
+            output_type=pytesseract.Output.DICT,
+            timeout=OCR_TIMEOUT_SECONDS,
+        )
     finally:
         del image, gray, processed
 

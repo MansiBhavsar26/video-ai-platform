@@ -180,3 +180,46 @@ def test_ocr_runs_periodically_and_on_detected_screen_frames():
     assert analyzer._should_run_ocr(1, [{"label": "laptop"}])
     assert analyzer._should_run_ocr(2, [{"label": "TV"}])
     assert analyzer._should_run_ocr(2, [{"label": "cell phone"}])
+
+
+def test_ocr_failure_degrades_without_interrupting_visual_analysis(monkeypatch):
+    monkeypatch.setattr(
+        analyzer,
+        "extract_text",
+        lambda frame_path: (_ for _ in ()).throw(FileNotFoundError("hidden path")),
+    )
+
+    assert analyzer._extract_ocr_text_safely("frame.jpg") == ""
+
+
+def test_visual_analysis_completes_when_ocr_raises(monkeypatch):
+    monkeypatch.setattr(
+        analyzer,
+        "smart_sample_video",
+        lambda video_path, output_dir: [{"filepath": "frame.jpg", "timestamp": 1.0}],
+    )
+    monkeypatch.setattr(analyzer, "release_detector_model", lambda: None)
+    monkeypatch.setattr(analyzer, "detect_objects", lambda filepath: [])
+    monkeypatch.setattr(
+        analyzer,
+        "extract_text",
+        lambda filepath: (_ for _ in ()).throw(FileNotFoundError("hidden path")),
+    )
+    monkeypatch.setattr(analyzer, "aggregate_detections", lambda detections: {})
+    monkeypatch.setattr(analyzer, "detect_scene_changes", lambda frames: [])
+    monkeypatch.setattr(analyzer, "build_timeline", lambda *args: [])
+    monkeypatch.setattr(analyzer, "save_video_evidence", lambda **kwargs: None)
+    monkeypatch.setattr(analyzer, "generate_video_description", lambda **kwargs: "ok")
+    monkeypatch.setattr(analyzer, "build_developer_action_timeline", lambda segments: [])
+    monkeypatch.setattr(analyzer, "fuse_evidence", lambda **kwargs: [])
+
+    result = analyzer.analyze_video(
+        video_path="sample.mp4",
+        video_id=7,
+        db=DummyDB(),
+        video_duration=2,
+        transcript_segments=[],
+    )
+
+    assert result["description"] == "ok"
+    assert result["ocr_results"] == []

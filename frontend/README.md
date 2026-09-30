@@ -28,7 +28,7 @@ VITE_API_BASE_URL=https://your-public-api-domain.example
 
 This value must be a public, non-secret base URL. Do not place backend credentials or private keys in VITE_ variables.
 
-## Required backend endpoint
+## Early-access backend endpoint
 
 The early-access form expects a public backend route:
 
@@ -46,7 +46,7 @@ Request body:
 }
 ```
 
-The backend must return JSON in the form:
+The endpoint is implemented by the backend and returns JSON in the form:
 
 ```json
 {
@@ -64,7 +64,9 @@ or an error response:
 }
 ```
 
-Until that endpoint is implemented, the UI remains in a safe non-submission state and shows a clear unavailable message instead of pretending the form succeeded.
+The form submits the visitor's name and email to the backend. The consent
+checkbox is part of the frontend flow; it is not currently persisted as a
+separate database field.
 
 ## Deployment notes
 
@@ -82,4 +84,4 @@ Until that endpoint is implemented, the UI remains in a safe non-submission stat
 - Confirm the early-access form does not silently store submissions in browser localStorage for production.
 - Confirm the site works correctly over HTTPS.
 
-The `/app` analyzer accepts YouTube URLs and local `.mp4`, `.mov`, `.webm`, or `.mkv` files. The local upload limit defaults to 200 MiB. If the backend sets a different `UPLOAD_MAX_BYTES`, set the same byte value in the frontend build as `VITE_MAX_UPLOAD_BYTES` so browser validation matches the server. The backend also limits local uploads to 30 minutes by default (`VIDEO_ANALYSIS_MAX_DURATION_SECONDS`).
+The `/app` analyzer accepts YouTube URLs and local `.mp4`, `.mov`, `.webm`, or `.mkv` files. The local upload limit defaults to 200 MiB. If the backend sets a different `UPLOAD_MAX_BYTES`, set the same byte value in the frontend build as `VITE_MAX_UPLOAD_BYTES` so browser validation matches the server. The backend also limits local uploads to 30 minutes by default (`VIDEO_ANALYSIS_MAX_DURATION_SECONDS`). For the production site, set `VITE_API_BASE_URL=https://video-ai-platform-l80h.onrender.com`; this is a public URL, not a secret.

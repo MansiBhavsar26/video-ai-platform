@@ -15,6 +15,7 @@ from fastapi import (
     UploadFile,
 )
 
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from ..config import (
@@ -66,6 +67,15 @@ def _upload_limit_message() -> str:
     else:
         size_label = f"{UPLOAD_MAX_BYTES} bytes"
     return f"Video exceeds the current {size_label} upload limit."
+
+
+def _claim_analysis(db: Session, video_id: int) -> bool:
+    result = db.execute(
+        update(Video)
+        .where(Video.id == video_id, Video.status != "processing")
+        .values(status="processing")
+    )
+    return result.rowcount == 1
 
 
 
@@ -293,8 +303,22 @@ def analyze_uploaded_video(
             detail=str(error),
         ) from error
 
-    video.status = "processing"
-    db.commit()
+    if not _claim_analysis(db, video.id):
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Video analysis is already in progress.",
+        )
+
+    try:
+        db.commit()
+    except Exception as error:
+        db.rollback()
+        logger.exception("Unable to claim video analysis")
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to start video analysis.",
+        ) from error
 
     background_tasks.add_task(
         run_analysis_job,

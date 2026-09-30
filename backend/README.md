@@ -109,8 +109,22 @@ For verification, check `/health`, `/docs`, `POST /api/early-access`, a YouTube
 analysis request, and `GET /videos/{id}/steps`. Set `CORS_ORIGINS` to a
 comma-separated list of exact allowed origins; do not use `*` in production.
 
-Full uploaded-video analysis requires OpenCV, Tesseract, and the YOLO weights
-configured by `YOLO_MODEL_PATH`; the model file is not downloaded automatically.
+Full uploaded-video analysis requires OpenCV and the configured Faster-Whisper
+model. YOLO uses the lightweight `yolo11n.pt` weights. If the configured file is
+missing and its filename is `yolo11n.pt`, the backend downloads that specific
+Ultralytics asset into the configured file's parent directory on first use and
+reuses it for the rest of that running instance. Other missing custom model
+files fail safely; they are not downloaded. The Render filesystem is
+ephemeral, so the YOLO weights may need to be downloaded again after a restart
+or instance replacement. No weight file is committed to Git.
+
+OCR is optional enrichment. If Tesseract is installed and available on `PATH`,
+OCR runs normally. On Linux deployments, install the OS-level Tesseract
+executable in the service image/build environment; `pytesseract` alone is only
+the Python wrapper. Set `TESSERACT_PATH` only when the executable is not on
+`PATH`. If the executable is absent or OCR fails, the backend skips OCR and
+continues analysis without OCR-derived evidence. This repository has no
+Render build configuration that installs Tesseract automatically.
 
 ### Temporary video and frame storage
 
@@ -151,9 +165,9 @@ public backend URL, for example `https://YOUR-BACKEND-DOMAIN`.
 
 ## Local video uploads
 
-The app accepts `.mp4`, `.mov`, `.webm`, and `.mkv` uploads. MP4 is the recommended format. `POST /videos/upload` accepts multipart form data in the `file` field, checks the media type, extension, empty-file condition, and configured limits before saving to the configured storage backend. Non-YouTube media acquired through `POST /videos/url` uses the same byte and duration limits; YouTube continues through its transcript-only path. `UPLOAD_MAX_BYTES` sets the limit in bytes and defaults to 200 MiB. `VIDEO_ANALYSIS_MAX_DURATION_SECONDS` defaults to 1800 seconds (30 minutes). Files exceeding either limit are rejected before a persistent upload is created. The endpoint returns the created video ID and safe metadata, not its storage path.
+The app accepts `.mp4`, `.mov`, `.webm`, and `.mkv` uploads. MP4 is the recommended format. `POST /videos/upload` accepts multipart form data in the `file` field, checks the media type, extension, empty-file condition, and configured limits before saving to the local filesystem under `UPLOAD_DIR`. Non-YouTube media acquired through `POST /videos/url` uses the same byte and duration limits; YouTube continues through its transcript-only path. `UPLOAD_MAX_BYTES` sets the limit in bytes and defaults to 200 MiB. `VIDEO_ANALYSIS_MAX_DURATION_SECONDS` defaults to 1800 seconds (30 minutes). Files exceeding either limit are rejected before a persistent upload is created. The endpoint returns the created video ID and safe metadata, not its storage path.
 
-Analysis is bounded for the Render Free 512 MB MVP: `VIDEO_ANALYSIS_MAX_FRAMES` defaults to 30 sampled frames, `VIDEO_ANALYSIS_FRAME_ANALYSIS_INTERVAL_SECONDS` defaults to 10 seconds, and `VIDEO_ANALYSIS_MAX_FRAME_DIMENSION` defaults to 1280 pixels. These can be lowered for a smaller memory budget. Whisper runs before visual analysis and is released before YOLO loads; OCR runs on likely screen/device frames and every third sampled frame as a fallback. YOLO uses the lightweight `yolo11n.pt` model and limits detections per frame. FFmpeg/OpenCV generated frames are temporary and cleaned after analysis, including failed jobs where the process remains alive. The original uploaded source is retained.
+Analysis uses bounded inputs for the Render Free 512 MB plan, but actual Render RSS must still be verified with a deployed run. `VIDEO_TRANSCRIPTION_CHUNK_SECONDS` defaults to 30 seconds and is capped at 30; `VIDEO_TRANSCRIPTION_CHUNK_OVERLAP_SECONDS` defaults to 2 seconds and is capped at 5. Audio is decoded into one temporary chunk at a time; this bounds audio and feature extraction by chunk duration instead of full-video duration. Whisper runs before visual analysis and is released before YOLO weights load. `VIDEO_ANALYSIS_MAX_FRAMES` defaults to 30 sampled frames, `VIDEO_ANALYSIS_FRAME_ANALYSIS_INTERVAL_SECONDS` defaults to 10 seconds, and `VIDEO_ANALYSIS_MAX_FRAME_DIMENSION` defaults to 1280 pixels. OCR runs on likely screen/device frames and every third sampled frame as a fallback. YOLO uses `yolo11n.pt` and limits detections per frame. Generated frames are cleaned after analysis, including failed jobs where the process remains alive. The original uploaded source is retained.
 
 Start processing with `POST /videos/{video_id}/analyze`, then poll `GET /videos/{video_id}/status` until the status is `completed` or `failed`. Completed guides are available at `GET /videos/{video_id}/steps`. Upload analysis uses faster-whisper and the existing visual analysis services. Local development needs FFmpeg and writable upload/frame storage. On Render Free, both source videos and extracted frames use the ephemeral service filesystem and can disappear after restart or redeploy. If a source is gone, status reports that it must be uploaded again; no persistent media service is configured by this MVP. PostgreSQL tutorial results remain stored.
 
@@ -164,3 +178,17 @@ step records separately. In the recent 144p React tutorial excerpt run, the
 analysis completed with transcript-backed steps but no cleaned OCR evidence, so
 zero `VideoEvidence` records were expected for that run; this does not mean the
 transcript or tutorial-step pipeline failed.
+
+## Tests and production smoke test
+
+Run the backend suite from `backend/` with `python -m pytest -q` and compile
+checks with `python -m compileall app`. The frontend checks are `npm run lint`
+and `npm run build` from `frontend/`. Follow
+[PRODUCTION_SMOKE_TEST.md](PRODUCTION_SMOKE_TEST.md) for one manual production
+check of health, YouTube transcript analysis, local upload, status, and steps.
+
+Render Free has a 512 MB memory ceiling. Transcription is processed in bounded
+chunks before visual analysis, and sampled frames are limited, but these code
+limits do not guarantee that the deployed process will stay below the ceiling.
+Observe Render Events and memory use during a short-video deployment check;
+local success does not prove Render memory stability.

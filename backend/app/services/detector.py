@@ -1,24 +1,49 @@
 import gc
+import logging
 from pathlib import Path
+from threading import Lock
 
 from ultralytics import YOLO
+from ultralytics.utils.checks import check_file
 
 from ..config import YOLO_MAX_DETECTIONS, YOLO_MODEL_PATH
 
 
 model = None
+logger = logging.getLogger(__name__)
+_model_lock = Lock()
+_YOLO11N_URL = "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n.pt"
+
+
+def _ensure_model_file(model_path: Path) -> Path:
+    if model_path.is_file():
+        return model_path
+
+    # Only auto-fetch the known lightweight model into the configured local cache.
+    if model_path.name != "yolo11n.pt":
+        raise RuntimeError("Configured YOLO model file is unavailable.")
+
+    try:
+        model_path.parent.mkdir(parents=True, exist_ok=True)
+        downloaded = Path(
+            check_file(_YOLO11N_URL, download_dir=str(model_path.parent))
+        )
+        if downloaded.name != model_path.name or not downloaded.is_file():
+            raise RuntimeError("YOLO model download did not produce the expected file.")
+        return downloaded
+    except Exception as error:
+        logger.warning("YOLO11n model could not be obtained for this instance.")
+        raise RuntimeError("YOLO model is unavailable for video analysis.") from error
 
 
 def _get_model():
     global model
 
     if model is None:
-        model_path = Path(YOLO_MODEL_PATH)
-        if not model_path.is_file():
-            raise RuntimeError(
-                "YOLO model file is not available for video analysis."
-            )
-        model = YOLO(str(model_path))
+        with _model_lock:
+            if model is None:
+                model_path = _ensure_model_file(Path(YOLO_MODEL_PATH))
+                model = YOLO(str(model_path))
 
     return model
 

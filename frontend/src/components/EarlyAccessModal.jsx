@@ -237,7 +237,7 @@ function EarlyAccessModal({ isOpen, onClose }) {
                     aria-invalid={Boolean(errors.consent)}
                   />
                   <span>
-                    I agree to be contacted about early access and product updates. See the{' '}
+                    I agree to be contacted about early access and product updates. My name and email are stored for this purpose; this checkbox choice is not stored separately. See the{' '}
                     <Link to="/privacy-policy" onClick={handleClose}>Privacy Policy</Link>.
                   </span>
                 </label>
