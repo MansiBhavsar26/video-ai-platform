@@ -1,5 +1,7 @@
 import asyncio
+import logging
 import time
+import weakref
 from io import BytesIO
 from pathlib import Path
 
@@ -16,7 +18,7 @@ from app.models import (
     Video,
     VideoEvidence,
 )
-from app.services import analysis_job, analysis_recovery
+from app.services import analysis_job, analysis_recovery, analyzer
 from app.services.evidence_storage import save_video_evidence
 from app.services.storage import LocalStorageBackend, make_video_storage_key
 
@@ -212,7 +214,6 @@ def test_missing_source_video_becomes_failed_not_stuck(
     )
     monkeypatch.setattr(analysis_job, "SessionLocal", recovery_db)
     monkeypatch.setattr(analysis_job, "get_local_storage", lambda: storage)
-    monkeypatch.setattr(analysis_job.traceback, "print_exc", lambda: None)
 
     asyncio.run(analysis_recovery.recover_interrupted_analyses())
 
@@ -245,7 +246,6 @@ def test_recovery_rejects_unknown_duration_before_transcription(
     )
     monkeypatch.setattr(analysis_job, "SessionLocal", recovery_db)
     monkeypatch.setattr(analysis_job, "get_local_storage", lambda: storage)
-    monkeypatch.setattr(analysis_job.traceback, "print_exc", lambda: None)
     monkeypatch.setattr(
         analysis_job,
         "transcribe_video",
@@ -265,7 +265,9 @@ def test_synthetic_video_four_recovers_and_rerun_replaces_results(
     recovery_db,
     monkeypatch,
     tmp_path,
+    caplog,
 ):
+    caplog.set_level(logging.INFO)
     storage = LocalStorageBackend(tmp_path / "uploads", tmp_path / "frames")
     video_path = storage.save_stream(
         BytesIO(b"small deterministic video"),
@@ -310,7 +312,13 @@ def test_synthetic_video_four_recovers_and_rerun_replaces_results(
         release_transcriber,
     )
 
+    class AnalysisResult(dict):
+        pass
+
+    visual_result_reference = None
+
     def deterministic_visual_analysis(video_path, video_id, db, **kwargs):
+        nonlocal visual_result_reference
         assert lifecycle[-1] == "whisper_released"
         lifecycle.append("visual_analysis")
         temporary_frame = Path(kwargs["frames_root"]) / str(video_id) / "sample.jpg"
@@ -333,13 +341,14 @@ def test_synthetic_video_four_recovers_and_rerun_replaces_results(
             video_id,
             [{"timestamp": 0, "text": "Install dependencies", "confidence": 0.9}],
         )
-        return {"description": "Synthetic local test video"}
+        result = AnalysisResult(description="Synthetic local test video")
+        visual_result_reference = weakref.ref(result)
+        return result
 
     monkeypatch.setattr(analysis_job, "analyze_video", deterministic_visual_analysis)
-    monkeypatch.setattr(
-        analysis_job,
-        "build_tutorial_steps",
-        lambda segments: [
+    def build_steps(segments):
+        assert visual_result_reference() is None
+        return [
             {
                 "step": 1,
                 "action": "run_command",
@@ -348,8 +357,9 @@ def test_synthetic_video_four_recovers_and_rerun_replaces_results(
                 "end_time": 1.0,
                 "evidence": {"source": "transcript", "text": "Run npm install."},
             }
-        ],
-    )
+        ]
+
+    monkeypatch.setattr(analysis_job, "build_tutorial_steps", build_steps)
 
     # Invoke the FastAPI startup hook to model the next process starting.
     from app import main
@@ -379,6 +389,11 @@ def test_synthetic_video_four_recovers_and_rerun_replaces_results(
         "transcribe", "whisper_released", "visual_analysis",
         "transcribe", "whisper_released", "visual_analysis",
     ]
+    assert "video=4 stage=transcription complete" in caplog.text
+    assert "segments=1" in caplog.text
+    assert "video=4 stage=visual_analysis complete" in caplog.text
+    assert "video=4 stage=tutorial_steps complete" in caplog.text
+    assert "video=4 stage=completed" in caplog.text
     assert Path(video_path).is_file()
     assert not (storage.frames_dir / "4").exists()
 
@@ -397,6 +412,7 @@ def test_visual_failure_cleans_frames_but_retains_source(
     recovery_db,
     monkeypatch,
     tmp_path,
+    caplog,
 ):
     storage = LocalStorageBackend(tmp_path / "uploads", tmp_path / "frames")
     video_path = storage.save_stream(
@@ -429,6 +445,10 @@ def test_visual_failure_cleans_frames_but_retains_source(
 
     analysis_job.run_analysis_job(45)
 
+    assert "video=45 stage=visual_analysis failed" in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
+    assert "video=45 stage=job failed" in caplog.text
+
     db = recovery_db()
     try:
         assert db.query(Video).filter(Video.id == 45).one().status == "failed"
@@ -437,3 +457,90 @@ def test_visual_failure_cleans_frames_but_retains_source(
 
     assert Path(video_path).is_file()
     assert not (storage.frames_dir / "45").exists()
+
+
+def test_disabled_object_detection_completes_with_ocr_and_tutorial_steps(
+    recovery_db,
+    monkeypatch,
+    tmp_path,
+    caplog,
+):
+    caplog.set_level("INFO")
+    storage = LocalStorageBackend(tmp_path / "uploads", tmp_path / "frames")
+    video_path = storage.save_stream(
+        BytesIO(b"small coding tutorial"),
+        make_video_storage_key("disabled-detection", ".mp4"),
+    )
+    _add_video(
+        recovery_db,
+        video_id=46,
+        status="processing",
+        filepath=video_path,
+    )
+    transcription_calls = []
+    transcript_segments = [
+        {
+            "start_time": 0.0,
+            "end_time": 1.0,
+            "text": "Now let's create our Product Item component",
+        }
+    ]
+
+    monkeypatch.setattr(analysis_job, "SessionLocal", recovery_db)
+    monkeypatch.setattr(analysis_job, "get_local_storage", lambda: storage)
+
+    def transcribe(*args, **kwargs):
+        transcription_calls.append(True)
+        return {"segments": transcript_segments}
+
+    monkeypatch.setattr(analysis_job, "transcribe_video", transcribe)
+    monkeypatch.setattr(analysis_job, "release_transcription_model", lambda: None)
+    monkeypatch.setattr(analyzer, "ENABLE_OBJECT_DETECTION", False)
+    monkeypatch.setattr(
+        analyzer,
+        "smart_sample_video",
+        lambda **kwargs: [{"filepath": "frame.jpg", "timestamp": 0.5}],
+    )
+    monkeypatch.setattr(
+        analyzer,
+        "detect_objects",
+        lambda *args, **kwargs: pytest.fail("detector ran while disabled"),
+    )
+    monkeypatch.setattr(
+        analyzer,
+        "release_detector_model",
+        lambda: pytest.fail("detector model was loaded while disabled"),
+    )
+    monkeypatch.setattr(
+        analyzer,
+        "extract_text",
+        lambda path, video_id=None: "npm install react",
+    )
+    monkeypatch.setattr(analyzer, "detect_scene_changes", lambda frames: [])
+    monkeypatch.setattr(
+        analyzer,
+        "generate_video_description",
+        lambda **kwargs: "coding tutorial",
+    )
+
+    analysis_job.run_analysis_job(46)
+
+    db = recovery_db()
+    try:
+        video = db.query(Video).filter(Video.id == 46).one()
+        steps = db.query(TutorialStep).filter(TutorialStep.video_id == 46).all()
+        assert video.status == "completed"
+        assert transcription_calls == [True]
+        assert db.query(TranscriptSegment).filter(TranscriptSegment.video_id == 46).count() == 1
+        assert db.query(Detection).filter(Detection.video_id == 46).count() == 0
+        assert db.query(VideoEvidence).filter(VideoEvidence.video_id == 46).count() == 1
+        assert len(steps) == 1
+        assert steps[0].action == "create_component"
+        assert steps[0].instruction
+        assert steps[0].evidence_text == transcript_segments[0]["text"]
+    finally:
+        db.close()
+
+    assert "video=46 object_detection disabled" in caplog.text
+    assert "video=46 stage=ocr complete" in caplog.text
+    assert "video=46 stage=tutorial_steps complete" in caplog.text

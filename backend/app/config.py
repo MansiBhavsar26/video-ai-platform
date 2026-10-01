@@ -14,6 +14,24 @@ if not DATABASE_URL:
     )
 
 
+def _parse_boolean(value: str | None, *, default: bool) -> bool:
+    if value is None:
+        return default
+
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError("ENABLE_OBJECT_DETECTION must be a boolean value.")
+
+
+ENABLE_OBJECT_DETECTION = _parse_boolean(
+    os.getenv("ENABLE_OBJECT_DETECTION"),
+    default=True,
+)
+
+
 TESSERACT_PATH = os.getenv(
     "TESSERACT_PATH",
     "",

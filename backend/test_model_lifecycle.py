@@ -1,5 +1,10 @@
 import os
+import subprocess
+import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Lock
+from time import sleep
 
 import pytest
 
@@ -110,7 +115,35 @@ def test_yolo_inference_caps_detections_per_frame(monkeypatch):
 
     detections = detector.detect_objects("synthetic-frame.jpg")
     assert len(detections) == config.YOLO_MAX_DETECTIONS
+    assert options["imgsz"] == 416
+    assert options["batch"] == 1
+    assert options["device"] == "cpu"
     assert options["max_det"] == config.YOLO_MAX_DETECTIONS
+
+
+def test_yolo_inference_is_serialized_across_video_jobs(monkeypatch):
+    state_lock = Lock()
+    active = 0
+    maximum_active = 0
+
+    class FakeModel:
+        names = {}
+
+        def predict(self, image_path, **kwargs):
+            nonlocal active, maximum_active
+            with state_lock:
+                active += 1
+                maximum_active = max(maximum_active, active)
+            sleep(0.02)
+            with state_lock:
+                active -= 1
+            return []
+
+    monkeypatch.setattr(detector, "model", FakeModel())
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        list(executor.map(detector.detect_objects, ["frame.jpg"] * 8))
+
+    assert maximum_active == 1
 
 
 def test_render_mvp_uses_tiny_whisper_model():
@@ -121,3 +154,56 @@ def test_default_video_frame_limit_is_30():
     assert config.VIDEO_ANALYSIS_MAX_FRAMES == int(
         os.getenv("VIDEO_ANALYSIS_MAX_FRAMES", "30")
     )
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        ("true", True),
+        ("false", False),
+        ("1", True),
+        ("0", False),
+        ("yes", True),
+        ("no", False),
+    ],
+)
+def test_object_detection_boolean_parser(value, expected):
+    assert config._parse_boolean(value, default=True) is expected
+
+
+def test_object_detection_boolean_parser_uses_local_default():
+    assert config._parse_boolean(None, default=True) is True
+
+
+def test_object_detection_boolean_parser_rejects_unknown_values():
+    with pytest.raises(ValueError, match="ENABLE_OBJECT_DETECTION"):
+        config._parse_boolean("sometimes", default=True)
+
+
+def test_disabled_application_import_does_not_load_torch_or_ultralytics(tmp_path):
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "DATABASE_URL": f"sqlite:///{(tmp_path / 'disabled.sqlite').as_posix()}",
+            "ENABLE_OBJECT_DETECTION": "false",
+            "UPLOAD_DIR": str(tmp_path / "uploads"),
+            "FRAMES_DIR": str(tmp_path / "frames"),
+            "SUPADATA_API_KEY": "",
+        }
+    )
+    code = (
+        "import sys; import app.main; "
+        "assert 'torch' not in sys.modules; "
+        "assert 'ultralytics' not in sys.modules"
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=Path(__file__).parent,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr

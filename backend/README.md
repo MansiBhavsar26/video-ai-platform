@@ -165,6 +165,13 @@ public backend URL, for example `https://YOUR-BACKEND-DOMAIN`.
 
 ## Local video uploads
 
+`ENABLE_OBJECT_DETECTION` controls optional YOLO analysis and defaults to
+`true` to preserve local-development behavior. Set it to `false` to skip YOLO
+and avoid importing Ultralytics/PyTorch during the request. Transcription,
+sampled-frame OCR, developer-action extraction, evidence, and tutorial-step
+generation continue; when YOLO is disabled, OCR uses its periodic sampled-frame
+fallback without detector-based screen selection.
+
 The app accepts `.mp4`, `.mov`, `.webm`, and `.mkv` uploads. MP4 is the recommended format. `POST /videos/upload` accepts multipart form data in the `file` field, checks the media type, extension, empty-file condition, and configured limits before saving to the local filesystem under `UPLOAD_DIR`. Non-YouTube media acquired through `POST /videos/url` uses the same byte and duration limits; YouTube continues through its transcript-only path. `UPLOAD_MAX_BYTES` sets the limit in bytes and defaults to 200 MiB. `VIDEO_ANALYSIS_MAX_DURATION_SECONDS` defaults to 1800 seconds (30 minutes). Files exceeding either limit are rejected before a persistent upload is created. The endpoint returns the created video ID and safe metadata, not its storage path.
 
 Analysis uses bounded inputs for the Render Free 512 MB plan, but actual Render RSS must still be verified with a deployed run. `VIDEO_TRANSCRIPTION_CHUNK_SECONDS` defaults to 30 seconds and is capped at 30; `VIDEO_TRANSCRIPTION_CHUNK_OVERLAP_SECONDS` defaults to 2 seconds and is capped at 5. Audio is decoded into one temporary chunk at a time; this bounds audio and feature extraction by chunk duration instead of full-video duration. Whisper runs before visual analysis and is released before YOLO weights load. `VIDEO_ANALYSIS_MAX_FRAMES` defaults to 30 sampled frames, `VIDEO_ANALYSIS_FRAME_ANALYSIS_INTERVAL_SECONDS` defaults to 10 seconds, and `VIDEO_ANALYSIS_MAX_FRAME_DIMENSION` defaults to 1280 pixels. OCR runs on likely screen/device frames and every third sampled frame as a fallback. YOLO uses `yolo11n.pt` and limits detections per frame. Generated frames are cleaned after analysis, including failed jobs where the process remains alive. The original uploaded source is retained.
