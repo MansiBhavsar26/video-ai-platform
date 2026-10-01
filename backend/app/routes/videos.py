@@ -40,7 +40,7 @@ from .youtube import (
 from ..services.youtube_transcript import YouTubeTranscriptError
 from ..services.storage import (
     StorageError,
-    get_local_storage,
+    get_video_storage,
     make_video_storage_key,
 )
 
@@ -56,8 +56,11 @@ logger = logging.getLogger(__name__)
 def _delete_storage_reference(storage, reference: str) -> None:
     try:
         storage.delete(reference)
-    except StorageError:
-        logger.exception("Unable to clean up stored video")
+    except StorageError as error:
+        logger.error(
+            "Unable to clean up stored video error_type=%s",
+            type(error).__name__,
+        )
 
 
 def _upload_limit_message() -> str:
@@ -153,7 +156,7 @@ def upload_video(
             VIDEO_ANALYSIS_MAX_DURATION_SECONDS,
         )
 
-        storage = get_local_storage()
+        storage = get_video_storage()
         with open(temporary_upload_path, "rb") as buffer:
             key = make_video_storage_key(uuid.uuid4().hex, extension)
             storage_reference = storage.save_stream(buffer, key)
@@ -168,7 +171,10 @@ def upload_video(
     except StorageError as error:
         if storage and storage_reference:
             _delete_storage_reference(storage, storage_reference)
-        logger.exception("Video storage operation failed")
+        logger.error(
+            "Video storage operation failed error_type=%s",
+            type(error).__name__,
+        )
         raise HTTPException(
             status_code=503,
             detail="Video storage is unavailable.",
@@ -232,7 +238,23 @@ def get_video_status(video_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Video not found.")
     response = {"video_id": video.id, "status": video.status}
     if video.status == "failed":
-        if video.filepath and not get_local_storage().exists(video.filepath):
+        try:
+            source_exists = (
+                get_video_storage().exists(video.filepath)
+                if video.filepath
+                else True
+            )
+        except StorageError as error:
+            logger.error(
+                "Video storage unavailable during status check error_type=%s",
+                type(error).__name__,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Video storage is unavailable.",
+            ) from error
+
+        if video.filepath and not source_exists:
             response["message"] = (
                 "The uploaded video is no longer available. "
                 "Please upload the video again."
@@ -283,14 +305,26 @@ def analyze_uploaded_video(
             detail="Video analysis is already in progress.",
         )
 
-    if video.filepath and not get_local_storage().exists(video.filepath):
-        raise HTTPException(
-            status_code=410,
-            detail=(
-                "The uploaded video is no longer available. "
-                "Please upload the video again."
-            ),
-        )
+    if video.filepath:
+        try:
+            source_exists = get_video_storage().exists(video.filepath)
+        except StorageError as error:
+            logger.error(
+                "Video storage unavailable before analysis error_type=%s",
+                type(error).__name__,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Video storage is unavailable.",
+            ) from error
+        if not source_exists:
+            raise HTTPException(
+                status_code=410,
+                detail=(
+                    "The uploaded video is no longer available. "
+                    "Please upload the video again."
+                ),
+            )
 
     try:
         validate_video_duration(
@@ -464,7 +498,7 @@ def add_video_from_url(
     storage_reference = None
     source_temporary_directory = None
     try:
-        storage = get_local_storage()
+        storage = get_video_storage()
         result = acquire_video_from_url(
             url,
             max_bytes=UPLOAD_MAX_BYTES,
@@ -524,7 +558,10 @@ def add_video_from_url(
                 os.remove(source_filepath)
             except OSError:
                 pass
-        logger.exception("Unable to store acquired video")
+        logger.error(
+            "Unable to store acquired video error_type=%s",
+            type(error).__name__,
+        )
         raise HTTPException(
             status_code=503,
             detail="Video storage is unavailable.",

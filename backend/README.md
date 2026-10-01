@@ -76,6 +76,27 @@ PORT=8000
 SUPADATA_API_KEY=your-server-side-provider-key
 ```
 
+Local development keeps `VIDEO_STORAGE_BACKEND=local` by default. To persist
+uploaded local videos across Render restarts, configure a private Cloudflare R2
+Standard bucket and set these Render environment variables:
+
+```dotenv
+VIDEO_STORAGE_BACKEND=r2
+R2_ACCOUNT_ID=your-cloudflare-account-id
+R2_ACCESS_KEY_ID=your-r2-access-key-id
+R2_SECRET_ACCESS_KEY=your-r2-secret-access-key
+R2_BUCKET_NAME=your-private-bucket-name
+```
+
+Create an R2 API token scoped to that bucket and enter its credentials directly
+in Render; do not commit them or put them in frontend variables. R2 is selected
+because its S3-compatible object API fits the existing upload, existence-check,
+download-to-temporary-file, and delete interface. The current published R2
+Standard free tier includes 10 GB-month storage, 1 million Class A operations,
+10 million Class B operations, and no egress fees; usage above the free tier is
+billable. Provider account/bucket creation and Render environment setup are
+manual steps and are not performed by this repository.
+
 `SUPADATA_API_KEY` configures the server-side YouTube transcript provider. It
 does not contain YouTube account credentials or cookies. When it is absent,
 local development falls back to `youtube-transcript-api`; production should

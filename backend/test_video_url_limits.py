@@ -86,7 +86,7 @@ def test_oversized_direct_url_never_reaches_persistent_storage(tmp_path, monkeyp
     response = StreamResponse([b"1234", b"56789"])
     monkeypatch.setattr(video_url.requests, "get", lambda *args, **kwargs: response)
     storage = FakeStorage()
-    monkeypatch.setattr(videos, "get_local_storage", lambda: storage)
+    monkeypatch.setattr(videos, "get_video_storage", lambda: storage)
     monkeypatch.setattr(videos, "UPLOAD_MAX_BYTES", 8)
     db = FakeDB()
 
@@ -110,7 +110,7 @@ def test_over_duration_url_media_is_rejected_before_persistent_storage(
     filepath = tmp_path / "source.mp4"
     filepath.write_bytes(b"video")
     storage = FakeStorage()
-    monkeypatch.setattr(videos, "get_local_storage", lambda: storage)
+    monkeypatch.setattr(videos, "get_video_storage", lambda: storage)
     monkeypatch.setattr(videos, "VIDEO_ANALYSIS_MAX_DURATION_SECONDS", 30)
     monkeypatch.setattr(
         videos,

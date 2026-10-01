@@ -23,3 +23,4 @@ yt-dlp
 requests
 faster-whisper
 openai
+boto3>=1.34,<2

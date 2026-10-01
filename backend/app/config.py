@@ -32,6 +32,16 @@ ENABLE_OBJECT_DETECTION = _parse_boolean(
 )
 
 
+VIDEO_STORAGE_BACKEND = os.getenv("VIDEO_STORAGE_BACKEND", "local").strip().lower()
+if VIDEO_STORAGE_BACKEND not in {"local", "r2"}:
+    raise ValueError("VIDEO_STORAGE_BACKEND must be 'local' or 'r2'.")
+
+R2_ACCOUNT_ID = os.getenv("R2_ACCOUNT_ID", "")
+R2_ACCESS_KEY_ID = os.getenv("R2_ACCESS_KEY_ID", "")
+R2_SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY", "")
+R2_BUCKET_NAME = os.getenv("R2_BUCKET_NAME", "")
+
+
 TESSERACT_PATH = os.getenv(
     "TESSERACT_PATH",
     "",

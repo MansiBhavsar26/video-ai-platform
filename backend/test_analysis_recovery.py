@@ -1,7 +1,9 @@
 import asyncio
 import logging
+import tempfile
 import time
 import weakref
+from contextlib import contextmanager
 from io import BytesIO
 from pathlib import Path
 
@@ -213,7 +215,7 @@ def test_missing_source_video_becomes_failed_not_stuck(
         filepath=str(missing_path),
     )
     monkeypatch.setattr(analysis_job, "SessionLocal", recovery_db)
-    monkeypatch.setattr(analysis_job, "get_local_storage", lambda: storage)
+    monkeypatch.setattr(analysis_job, "get_video_storage", lambda: storage)
 
     asyncio.run(analysis_recovery.recover_interrupted_analyses())
 
@@ -245,7 +247,7 @@ def test_recovery_rejects_unknown_duration_before_transcription(
         duration=duration,
     )
     monkeypatch.setattr(analysis_job, "SessionLocal", recovery_db)
-    monkeypatch.setattr(analysis_job, "get_local_storage", lambda: storage)
+    monkeypatch.setattr(analysis_job, "get_video_storage", lambda: storage)
     monkeypatch.setattr(
         analysis_job,
         "transcribe_video",
@@ -282,7 +284,7 @@ def test_synthetic_video_four_recovers_and_rerun_replaces_results(
     )
     monkeypatch.setattr(analysis_recovery, "SessionLocal", recovery_db)
     monkeypatch.setattr(analysis_job, "SessionLocal", recovery_db)
-    monkeypatch.setattr(analysis_job, "get_local_storage", lambda: storage)
+    monkeypatch.setattr(analysis_job, "get_video_storage", lambda: storage)
     lifecycle = []
 
     def transcribe(path, *, max_duration, video_duration):
@@ -427,7 +429,7 @@ def test_visual_failure_cleans_frames_but_retains_source(
         filepath=video_path,
     )
     monkeypatch.setattr(analysis_job, "SessionLocal", recovery_db)
-    monkeypatch.setattr(analysis_job, "get_local_storage", lambda: storage)
+    monkeypatch.setattr(analysis_job, "get_video_storage", lambda: storage)
     monkeypatch.setattr(
         analysis_job,
         "transcribe_video",
@@ -487,7 +489,7 @@ def test_disabled_object_detection_completes_with_ocr_and_tutorial_steps(
     ]
 
     monkeypatch.setattr(analysis_job, "SessionLocal", recovery_db)
-    monkeypatch.setattr(analysis_job, "get_local_storage", lambda: storage)
+    monkeypatch.setattr(analysis_job, "get_video_storage", lambda: storage)
 
     def transcribe(*args, **kwargs):
         transcription_calls.append(True)
@@ -544,3 +546,73 @@ def test_disabled_object_detection_completes_with_ocr_and_tutorial_steps(
     assert "video=46 object_detection disabled" in caplog.text
     assert "video=46 stage=ocr complete" in caplog.text
     assert "video=46 stage=tutorial_steps complete" in caplog.text
+
+
+def test_analysis_job_materializes_storage_key_and_cleans_temporary_download(
+    recovery_db,
+    monkeypatch,
+    tmp_path,
+):
+    key = "videos/persistent/source.mp4"
+    _add_video(
+        recovery_db,
+        video_id=47,
+        status="processing",
+        filepath=key,
+    )
+    frame_storage = LocalStorageBackend(tmp_path / "frames-uploads", tmp_path / "frames")
+    observed = {}
+
+    class PersistentStorage:
+        def frame_workspace(self, video_id):
+            return frame_storage.frame_workspace(video_id)
+
+        @contextmanager
+        def materialize(self, reference):
+            assert reference == key
+            with tempfile.TemporaryDirectory(dir=tmp_path, prefix="materialized-") as directory:
+                local_path = Path(directory) / "download.mp4"
+                local_path.write_bytes(b"temporary video")
+                observed["path"] = local_path
+                yield str(local_path)
+            observed["cleaned"] = not local_path.exists()
+
+    monkeypatch.setattr(analysis_job, "SessionLocal", recovery_db)
+    monkeypatch.setattr(analysis_job, "get_video_storage", PersistentStorage)
+    monkeypatch.setattr(
+        analysis_job,
+        "transcribe_video",
+        lambda path, **kwargs: (
+            observed.setdefault("transcribe_path", path),
+            {"segments": []},
+        )[1],
+    )
+    monkeypatch.setattr(analysis_job, "release_transcription_model", lambda: None)
+
+    def analyze(video_path, **kwargs):
+        assert Path(video_path).is_file()
+        observed["analyze_path"] = video_path
+        return {
+            "description": "Persistent-storage test",
+            "frames_processed": 0,
+            "detections_created": 0,
+            "ocr_results": [],
+            "fused_evidence": [],
+        }
+
+    monkeypatch.setattr(analysis_job, "analyze_video", analyze)
+    monkeypatch.setattr(analysis_job, "build_tutorial_steps", lambda segments: [])
+
+    analysis_job.run_analysis_job(47)
+
+    assert observed["transcribe_path"] == observed["analyze_path"]
+    assert observed["cleaned"] is True
+    assert not observed["path"].exists()
+    db = recovery_db()
+    try:
+        video = db.query(Video).filter(Video.id == 47).one()
+        assert video.status == "completed"
+        assert video.filepath == key
+        assert not Path(video.filepath).is_absolute()
+    finally:
+        db.close()

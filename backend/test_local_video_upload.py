@@ -54,7 +54,7 @@ def _upload(filename, content, content_type="video/mp4"):
 def test_upload_creates_upload_record_without_exposing_path(tmp_path, monkeypatch):
     monkeypatch.setattr(
         videos,
-        "get_local_storage",
+        "get_video_storage",
         lambda: LocalStorageBackend(tmp_path, tmp_path / "frames"),
     )
     monkeypatch.setattr(videos, "UPLOAD_MAX_BYTES", 1024)
@@ -72,6 +72,39 @@ def test_upload_creates_upload_record_without_exposing_path(tmp_path, monkeypatc
     assert Path(record.filepath).is_relative_to(tmp_path / "videos")
 
 
+def test_upload_persists_object_key_in_video_record(tmp_path, monkeypatch):
+    class KeyStorage:
+        def __init__(self):
+            self.saved_key = None
+            self.content = b""
+
+        def save_stream(self, source, key):
+            self.saved_key = key
+            chunks = []
+            while chunk := source.read(3):
+                chunks.append(chunk)
+            self.content = b"".join(chunks)
+            return key
+
+        def delete(self, reference):
+            pass
+
+    storage = KeyStorage()
+    monkeypatch.setattr(videos, "get_video_storage", lambda: storage)
+    monkeypatch.setattr(videos, "UPLOAD_MAX_BYTES", 1024)
+    monkeypatch.setattr(videos, "get_video_info", lambda path: {"duration": 12, "fps": 30})
+    db = FakeDB()
+
+    result = videos.upload_video(_upload("tutorial.mp4", b"streamed-video"), db)
+
+    record = db.added[0]
+    assert result["id"] == 17
+    assert record.filepath == storage.saved_key
+    assert record.filepath.startswith("videos/")
+    assert not Path(record.filepath).is_absolute()
+    assert storage.content == b"streamed-video"
+
+
 @pytest.mark.parametrize(
     "filename,content,content_type,message",
     [
@@ -83,7 +116,7 @@ def test_upload_creates_upload_record_without_exposing_path(tmp_path, monkeypatc
 def test_upload_rejects_invalid_files(tmp_path, monkeypatch, filename, content, content_type, message):
     monkeypatch.setattr(
         videos,
-        "get_local_storage",
+        "get_video_storage",
         lambda: LocalStorageBackend(tmp_path, tmp_path / "frames"),
     )
     monkeypatch.setattr(videos, "UPLOAD_MAX_BYTES", 1024)
@@ -100,7 +133,7 @@ def test_upload_enforces_configured_size_limit(tmp_path, monkeypatch):
     storage_initializations = []
     monkeypatch.setattr(
         videos,
-        "get_local_storage",
+        "get_video_storage",
         lambda: storage_initializations.append(True),
     )
     monkeypatch.setattr(videos, "UPLOAD_MAX_BYTES", 4)
@@ -119,7 +152,7 @@ def test_upload_rejects_over_duration_before_persistent_storage(tmp_path, monkey
     temporary_paths = []
     monkeypatch.setattr(
         videos,
-        "get_local_storage",
+        "get_video_storage",
         lambda: storage_initializations.append(True),
     )
     monkeypatch.setattr(videos, "UPLOAD_MAX_BYTES", 1024)
@@ -152,7 +185,7 @@ def test_upload_rejects_unknown_or_invalid_duration(
     storage_initializations = []
     monkeypatch.setattr(
         videos,
-        "get_local_storage",
+        "get_video_storage",
         lambda: storage_initializations.append(True),
     )
     monkeypatch.setattr(videos, "UPLOAD_MAX_BYTES", 1024)
@@ -177,7 +210,7 @@ def test_analyze_rejects_unknown_duration_before_scheduling(tmp_path, monkeypatc
         BytesIO(b"video"),
         "videos/unknown-duration/source.mp4",
     )
-    monkeypatch.setattr(videos, "get_local_storage", lambda: storage)
+    monkeypatch.setattr(videos, "get_video_storage", lambda: storage)
     video = SimpleNamespace(
         id=25,
         status="uploaded",
@@ -197,7 +230,7 @@ def test_analyze_rejects_unknown_duration_before_scheduling(tmp_path, monkeypatc
 
 def test_analyze_missing_local_video_returns_safe_reupload_message(tmp_path, monkeypatch):
     storage = LocalStorageBackend(tmp_path / "uploads", tmp_path / "frames")
-    monkeypatch.setattr(videos, "get_local_storage", lambda: storage)
+    monkeypatch.setattr(videos, "get_video_storage", lambda: storage)
     video = SimpleNamespace(
         id=23,
         status="uploaded",
@@ -218,9 +251,31 @@ def test_analyze_missing_local_video_returns_safe_reupload_message(tmp_path, mon
     assert video.status == "uploaded"
 
 
+def test_analyze_reports_storage_configuration_failure_safely(monkeypatch):
+    video = SimpleNamespace(
+        id=26,
+        status="uploaded",
+        filepath="videos/test/source.mp4",
+        duration=12,
+    )
+    tasks = BackgroundTasks()
+
+    def unavailable_storage():
+        raise videos.StorageError("R2 configuration is incomplete")
+
+    monkeypatch.setattr(videos, "get_video_storage", unavailable_storage)
+
+    with pytest.raises(HTTPException) as error:
+        videos.analyze_uploaded_video(26, tasks, FakeVideoDB(video))
+
+    assert error.value.status_code == 503
+    assert error.value.detail == "Video storage is unavailable."
+    assert not tasks.tasks
+
+
 def test_failed_video_status_reports_missing_source_without_path(tmp_path, monkeypatch):
     storage = LocalStorageBackend(tmp_path / "uploads", tmp_path / "frames")
-    monkeypatch.setattr(videos, "get_local_storage", lambda: storage)
+    monkeypatch.setattr(videos, "get_video_storage", lambda: storage)
     video = SimpleNamespace(
         id=24,
         status="failed",

@@ -164,7 +164,7 @@ def test_non_youtube_url_keeps_existing_acquisition_flow(monkeypatch, tmp_path):
         }
 
     monkeypatch.setattr(videos, "acquire_video_from_url", acquire)
-    monkeypatch.setattr(videos, "get_local_storage", lambda: storage)
+    monkeypatch.setattr(videos, "get_video_storage", lambda: storage)
     monkeypatch.setattr(
         videos,
         "get_video_info",

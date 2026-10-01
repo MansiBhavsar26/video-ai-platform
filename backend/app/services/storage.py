@@ -117,6 +117,7 @@ class LocalStorageBackend:
 
 
 _local_storage: LocalStorageBackend | None = None
+_video_storage = None
 
 
 def get_local_storage() -> LocalStorageBackend:
@@ -125,3 +126,25 @@ def get_local_storage() -> LocalStorageBackend:
     if _local_storage is None:
         _local_storage = LocalStorageBackend(config.UPLOAD_DIR, config.FRAMES_DIR)
     return _local_storage
+
+
+def get_video_storage():
+    """Return the configured durable source-video storage backend."""
+    global _video_storage
+    if _video_storage is not None:
+        return _video_storage
+
+    if config.VIDEO_STORAGE_BACKEND == "local":
+        _video_storage = get_local_storage()
+    else:
+        from .r2_storage import CloudflareR2StorageBackend
+
+        _video_storage = CloudflareR2StorageBackend.from_config(
+            upload_dir=config.UPLOAD_DIR,
+            frames_dir=config.FRAMES_DIR,
+            account_id=config.R2_ACCOUNT_ID,
+            access_key_id=config.R2_ACCESS_KEY_ID,
+            secret_access_key=config.R2_SECRET_ACCESS_KEY,
+            bucket_name=config.R2_BUCKET_NAME,
+        )
+    return _video_storage

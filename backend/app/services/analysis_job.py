@@ -12,7 +12,7 @@ from .transcription import transcribe_video, release_model as release_transcript
 from .transcript_storage import save_transcript
 from .developer_action_pipeline import build_tutorial_steps
 from .tutorial_step_storage import save_tutorial_steps
-from .storage import StorageError, get_local_storage
+from .storage import StorageError, get_video_storage
 from .video_processor import validate_video_duration
 
 
@@ -64,7 +64,7 @@ def run_analysis_job(video_id: int):
             f"Starting transcription for video {video_id}..."
         )
 
-        storage = get_local_storage()
+        storage = get_video_storage()
         with storage.frame_workspace(video.id) as frames_root:
             workspace = Path(frames_root) / str(video.id)
             try:
