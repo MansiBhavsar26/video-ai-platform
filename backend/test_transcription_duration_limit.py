@@ -70,7 +70,7 @@ def test_video_probe_reports_unopenable_video_as_unknown_duration(monkeypatch):
     assert capture.released
 
 
-@pytest.mark.parametrize("max_duration", [0, None, float("nan"), float("inf"), "invalid"])
+@pytest.mark.parametrize("max_duration", [0, float("nan"), float("inf"), "invalid"])
 def test_transcription_rejects_invalid_max_duration_before_loading_model(
     monkeypatch,
     max_duration,

@@ -23,12 +23,14 @@ def generate_video_description(
     # Collect detected objects
     # --------------------------------------------------
 
-    labels = [
-        detection["label"]
-        for detection in detections
-    ]
-
-    object_counts = Counter(labels)
+    if isinstance(detections, Counter):
+        object_counts = detections
+    else:
+        labels = [
+            detection["label"]
+            for detection in detections
+        ]
+        object_counts = Counter(labels)
 
     # --------------------------------------------------
     # Build object description

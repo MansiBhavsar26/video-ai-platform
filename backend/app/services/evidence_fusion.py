@@ -209,15 +209,20 @@ def _is_textually_compatible(action: dict, candidate_text: Any) -> bool:
 
 
 def _compatible_visual_event(action: dict, visual_event: dict) -> bool:
-    if not isinstance(action, dict) or not isinstance(visual_event, dict):
+    if not isinstance(action, dict):
         return False
 
     action_type = (action.get("action") or "").strip().lower().replace(" ", "_")
-    label_text = " ".join(
-        str(part)
-        for part in (visual_event.get("label"), visual_event.get("event_type"))
-        if part is not None
-    )
+    if isinstance(visual_event, tuple) and len(visual_event) == 2:
+        label_text = str(visual_event[1])
+    elif isinstance(visual_event, dict):
+        label_text = " ".join(
+            str(part)
+            for part in (visual_event.get("label"), visual_event.get("event_type"))
+            if part is not None
+        )
+    else:
+        return False
     if not action_type or not label_text:
         return False
 
@@ -347,6 +352,9 @@ def fuse_evidence(
 
         visual_matches: list[dict] = []
         for event in visual_events or []:
+            if isinstance(event, tuple) and len(event) == 2:
+                event_timestamp, event_label = event
+                event = {"timestamp": event_timestamp, "label": event_label}
             if not isinstance(event, dict):
                 continue
 

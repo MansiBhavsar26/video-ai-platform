@@ -20,7 +20,7 @@ class FakeModel:
         return iter(segments), SimpleNamespace(language="en", language_probability=0.9)
 
 
-def _run_with_mocked_chunks(monkeypatch, duration, model=None):
+def _run_with_mocked_chunks(monkeypatch, duration, model=None, max_duration=1800):
     model = model or FakeModel()
     ranges = []
 
@@ -35,7 +35,7 @@ def _run_with_mocked_chunks(monkeypatch, duration, model=None):
     monkeypatch.setattr(transcription, "VIDEO_TRANSCRIPTION_CHUNK_OVERLAP_SECONDS", 2)
     result = transcription.transcribe_video(
         "mock-video.mp4",
-        max_duration=1800,
+        max_duration=max_duration,
         video_duration=duration,
     )
     return result, ranges, model
@@ -49,10 +49,9 @@ def test_30_minute_video_is_split_into_bounded_chunks(monkeypatch):
     assert ranges[-1][1] == 1800
     assert all(end - start <= 30 for start, end in ranges)
     assert all(path != "mock-video.mp4" for path, _ in model.calls)
-    assert all(
-        float(options["clip_timestamps"].split(",")[1]) <= 30
-        for _, options in model.calls
-    )
+    assert all(options["beam_size"] == 1 for _, options in model.calls)
+    assert all(options["vad_filter"] is True for _, options in model.calls)
+    assert all("clip_timestamps" not in options for _, options in model.calls)
 
 
 def test_10_minute_video_produces_multiple_chunks(monkeypatch):
@@ -73,17 +72,73 @@ def test_short_video_uses_one_chunk(monkeypatch):
 def test_chunk_timestamps_are_adjusted_to_absolute_video_time(monkeypatch):
     model = FakeModel(
         chunk_segments=[
-            [SimpleNamespace(start=27, end=29, text="first")],
-            [SimpleNamespace(start=2, end=4, text="second")],
+            [SimpleNamespace(start=2, end=5, text="first")],
+            [SimpleNamespace(start=3, end=6, text="second")],
         ]
     )
     result, ranges, _ = _run_with_mocked_chunks(monkeypatch, 45, model)
 
     assert ranges[:2] == [(0, 30), (28, 45)]
     assert result["segments"] == [
-        {"start_time": 27.0, "end_time": 29.0, "text": "first"},
-        {"start_time": 30.0, "end_time": 32.0, "text": "second"},
+        {"start_time": 2.0, "end_time": 5.0, "text": "first"},
+        {"start_time": 31.0, "end_time": 34.0, "text": "second"},
     ]
+
+
+def test_segments_are_sorted_and_output_contract_is_preserved(monkeypatch):
+    model = FakeModel(
+        chunk_segments=[
+            [
+                SimpleNamespace(start=12, end=14, text="later"),
+                SimpleNamespace(start=2, end=5, text="earlier"),
+            ],
+            [SimpleNamespace(start=3, end=6, text="next chunk")],
+        ]
+    )
+
+    result, _, _ = _run_with_mocked_chunks(monkeypatch, 45, model)
+
+    assert set(result) == {"language", "language_probability", "segments"}
+    assert result["language"] == "en"
+    assert result["language_probability"] == 0.9
+    assert result["segments"] == [
+        {"start_time": 2.0, "end_time": 5.0, "text": "earlier"},
+        {"start_time": 12.0, "end_time": 14.0, "text": "later"},
+        {"start_time": 31.0, "end_time": 34.0, "text": "next chunk"},
+    ]
+
+
+def test_max_duration_limits_processing_without_rejecting_long_source(monkeypatch):
+    _, ranges, _ = _run_with_mocked_chunks(
+        monkeypatch,
+        duration=100,
+        max_duration=45,
+    )
+
+    assert ranges == [(0, 30), (28, 45)]
+
+
+def test_none_max_duration_uses_actual_video_duration(monkeypatch):
+    model = FakeModel()
+    ranges = []
+
+    def write_chunk(path, output, start, end):
+        ranges.append((start, end))
+        Path(output).write_bytes(b"mock")
+
+    monkeypatch.setattr(transcription, "_write_audio_chunk", write_chunk)
+    monkeypatch.setattr(transcription, "get_model", lambda: model)
+    monkeypatch.setattr(
+        transcription,
+        "get_video_info",
+        lambda path: {"duration": 65},
+    )
+    monkeypatch.setattr(transcription, "VIDEO_TRANSCRIPTION_CHUNK_SECONDS", 30)
+    monkeypatch.setattr(transcription, "VIDEO_TRANSCRIPTION_CHUNK_OVERLAP_SECONDS", 0)
+
+    transcription.transcribe_video("mock-video.mp4")
+
+    assert ranges == [(0, 30), (30, 60), (60, 65)]
 
 
 def test_obvious_identical_overlap_segment_is_removed(monkeypatch):
@@ -116,7 +171,9 @@ def test_whisper_model_is_loaded_once_for_the_full_chunk_job(monkeypatch):
     assert len(load_calls) == 1
     assert len(model.calls) > 1
     assert all(options["beam_size"] == 1 for _, options in model.calls)
-    assert all(options["vad_filter"] is False for _, options in model.calls)
+    assert all(options["vad_filter"] is True for _, options in model.calls)
+    assert model.calls[0][1]["language"] is None
+    assert all(options["language"] == "en" for _, options in model.calls[1:])
 
 
 def test_temporary_chunks_are_deleted_after_success(monkeypatch):
@@ -154,11 +211,32 @@ def test_temporary_chunk_and_model_are_released_after_failure(monkeypatch):
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("mock failure")),
     )
 
-    with pytest.raises(RuntimeError, match="mock failure"):
+    with pytest.raises(
+        RuntimeError,
+        match="Transcription chunk 1/1 failed",
+    ) as error:
         transcription.transcribe_video("video.mp4", 1800, video_duration=20)
 
+    assert str(error.value.__cause__) == "mock failure"
     assert path["released"]
     assert not Path(path["value"]).exists()
+
+
+def test_invalid_audio_chunk_fails_clearly_and_cleans_temporary_file(monkeypatch):
+    paths = []
+
+    def reject_audio(video, output, start, end):
+        paths.append(output)
+        raise ValueError("The video does not contain an audio track.")
+
+    monkeypatch.setattr(transcription, "_write_audio_chunk", reject_audio)
+    monkeypatch.setattr(transcription, "get_model", lambda: FakeModel())
+
+    with pytest.raises(RuntimeError, match="Transcription chunk 1/1 failed"):
+        transcription.transcribe_video("invalid-video.mp4", video_duration=20)
+
+    assert paths
+    assert all(not Path(path).exists() for path in paths)
 
 
 @pytest.mark.parametrize("duration", [0, None, float("nan"), float("inf"), "bad"])
@@ -173,15 +251,28 @@ def test_invalid_source_duration_is_rejected_before_model_load(monkeypatch, dura
         transcription.transcribe_video("video.mp4", 1800, video_duration=duration)
 
 
-def test_source_duration_above_maximum_is_rejected_before_model_load(monkeypatch):
+def test_source_duration_above_maximum_is_capped_before_transcription(monkeypatch):
+    ranges = []
+
+    def write_chunk(path, output, start, end):
+        ranges.append((start, end))
+
+    class EmptyModel:
+        def transcribe(self, path, **options):
+            return iter(()), SimpleNamespace(language="en", language_probability=0.9)
+
+    monkeypatch.setattr(transcription, "_write_audio_chunk", write_chunk)
     monkeypatch.setattr(
         transcription,
         "get_model",
-        lambda: pytest.fail("over-limit duration reached Whisper"),
+        lambda: EmptyModel(),
     )
+    monkeypatch.setattr(transcription, "VIDEO_TRANSCRIPTION_CHUNK_SECONDS", 30)
+    monkeypatch.setattr(transcription, "VIDEO_TRANSCRIPTION_CHUNK_OVERLAP_SECONDS", 0)
 
-    with pytest.raises(VideoDurationError):
-        transcription.transcribe_video("video.mp4", 1800, video_duration=1801)
+    transcription.transcribe_video("video.mp4", 45, video_duration=1801)
+
+    assert ranges == [(0, 30), (30, 45)]
 
 
 def test_pyav_chunk_extraction_writes_only_requested_audio_interval(tmp_path):

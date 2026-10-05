@@ -47,6 +47,20 @@ def test_developer_action_alone_returns_event(base_action):
     assert event["evidence"]["visual"] == []
 
 
+def test_compact_visual_event_preserves_fused_evidence(base_action):
+    result = fuse_evidence(
+        transcript_segments=[],
+        ocr_results=[],
+        developer_actions=[base_action],
+        visual_events=[(101.0, "laptop")],
+    )
+
+    assert result[0]["evidence"]["visual"] == [
+        {"timestamp": 101.0, "label": "laptop"}
+    ]
+    assert result[0]["confidence"] == 0.98
+
+
 def test_matching_transcript_increases_confidence_and_adds_reason(base_action):
     transcript_segments = [
         {"start_time": 99.0, "end_time": 103.0, "text": "I am going to install react-router-dom"}

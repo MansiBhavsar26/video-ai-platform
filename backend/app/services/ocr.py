@@ -76,17 +76,21 @@ def is_reasonable_text(text: str) -> bool:
     return True
 
 
-def extract_text(image_path: str) -> str:
+def extract_text(image_path: str, video_id: int | None = None) -> str:
     try:
         return _extract_text(image_path)
-    except Exception:
-        logger.warning("OCR is unavailable or failed; continuing without OCR.")
+    except Exception as error:
+        logger.warning(
+            "[analysis] video=%s stage=ocr failed error_type=%s; "
+            "continuing_without_ocr=true",
+            video_id if video_id is not None else "unknown",
+            type(error).__name__,
+        )
         return ""
 
 
 def _extract_text(image_path: str) -> str:
     image = cv2.imread(image_path)
-
     if image is None:
         return ""
 

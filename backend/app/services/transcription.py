@@ -1,4 +1,5 @@
 import gc
+import logging
 import math
 import tempfile
 import wave
@@ -17,6 +18,8 @@ from .video_processor import get_video_info, validate_video_duration
 
 MODEL_SIZE = "tiny"
 SAMPLE_RATE = 16_000
+
+logger = logging.getLogger(__name__)
 
 _model = None
 
@@ -229,35 +232,54 @@ def _is_duplicate_overlap(candidate: dict, previous_segments: list[dict], overla
 
 def transcribe_video(
     video_path: str,
-    max_duration: float,
+    max_duration: float | None = None,
     video_duration: float | None = None,
 ):
-    try:
-        max_duration = float(max_duration)
-    except (TypeError, ValueError, OverflowError) as error:
-        raise ValueError("A valid maximum transcription duration is required.") from error
-    if not math.isfinite(max_duration) or max_duration <= 0:
-        raise ValueError("A valid maximum transcription duration is required.")
+    if max_duration is not None:
+        try:
+            max_duration = float(max_duration)
+        except (TypeError, ValueError, OverflowError) as error:
+            raise ValueError(
+                "A valid maximum transcription duration is required."
+            ) from error
+        if not math.isfinite(max_duration) or max_duration <= 0:
+            raise ValueError("A valid maximum transcription duration is required.")
 
     if video_duration is None:
         video_duration = get_video_info(video_path)["duration"]
-    duration = validate_video_duration(video_duration, max_duration=max_duration)
+    duration = validate_video_duration(video_duration)
+    if max_duration is not None:
+        duration = min(duration, max_duration)
 
-    chunk_seconds = min(float(VIDEO_TRANSCRIPTION_CHUNK_SECONDS), 30.0)
+    chunk_seconds = float(VIDEO_TRANSCRIPTION_CHUNK_SECONDS)
     overlap_seconds = float(VIDEO_TRANSCRIPTION_CHUNK_OVERLAP_SECONDS)
     ranges = list(_chunk_ranges(duration, chunk_seconds, overlap_seconds))
+    logger.info(
+        "Starting transcription for %s: duration=%.2fs chunks=%s chunk_seconds=%.2f",
+        video_path,
+        duration,
+        len(ranges),
+        chunk_seconds,
+    )
     model = get_model()
     results = []
     language = None
     language_probability = 0.0
 
     try:
-        for chunk_start, chunk_end in ranges:
+        for chunk_number, (chunk_start, chunk_end) in enumerate(ranges, start=1):
             temporary_path = None
             segments = None
             info = None
             segment = None
             try:
+                logger.info(
+                    "Transcription chunk %s/%s: extracting audio %.2fs-%.2fs",
+                    chunk_number,
+                    len(ranges),
+                    chunk_start,
+                    chunk_end,
+                )
                 with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as file:
                     temporary_path = file.name
 
@@ -268,12 +290,18 @@ def transcribe_video(
                     chunk_end,
                 )
 
+                logger.info(
+                    "Transcription chunk %s/%s: transcribing %.2fs-%.2fs",
+                    chunk_number,
+                    len(ranges),
+                    chunk_start,
+                    chunk_end,
+                )
                 segments, info = model.transcribe(
                     temporary_path,
                     beam_size=1,
-                    vad_filter=False,
+                    vad_filter=True,
                     language=language,
-                    clip_timestamps=f"0,{chunk_end - chunk_start}",
                 )
                 if language is None:
                     language = info.language
@@ -301,6 +329,25 @@ def transcribe_video(
                         overlap_seconds,
                     ):
                         results.append(candidate)
+                logger.info(
+                    "Completed transcription chunk %s/%s: %.2fs-%.2fs",
+                    chunk_number,
+                    len(ranges),
+                    chunk_start,
+                    chunk_end,
+                )
+            except Exception as error:
+                logger.exception(
+                    "Transcription chunk %s/%s failed: %.2fs-%.2fs",
+                    chunk_number,
+                    len(ranges),
+                    chunk_start,
+                    chunk_end,
+                )
+                raise RuntimeError(
+                    f"Transcription chunk {chunk_number}/{len(ranges)} "
+                    f"failed ({chunk_start:.2f}s-{chunk_end:.2f}s)."
+                ) from error
             finally:
                 del segment, segments, info
                 if temporary_path is not None:
@@ -310,6 +357,9 @@ def transcribe_video(
     except Exception:
         release_model()
         raise
+
+    results.sort(key=lambda item: item["start_time"])
+    logger.info("Transcription completed. Segments: %s", len(results))
 
     return {
         "language": language or "und",
