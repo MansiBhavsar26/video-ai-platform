@@ -1,3 +1,4 @@
+import importlib
 import os
 import subprocess
 import sys
@@ -173,6 +174,21 @@ def test_object_detection_boolean_parser(value, expected):
 
 def test_object_detection_boolean_parser_uses_local_default():
     assert config._parse_boolean(None, default=True) is True
+
+
+def test_database_url_falls_back_to_sqlite_only_for_local_environments(monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+
+    import app.config as config_module
+
+    with pytest.raises(ValueError, match="DATABASE_URL"):
+        importlib.reload(config_module)
+
+    monkeypatch.setenv("APP_ENV", "local")
+    reloaded = importlib.reload(config_module)
+    assert reloaded.DATABASE_URL.startswith("sqlite://")
 
 
 def test_object_detection_boolean_parser_rejects_unknown_values():

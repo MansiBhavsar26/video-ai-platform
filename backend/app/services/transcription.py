@@ -80,7 +80,7 @@ def _write_audio_chunk(
     end_seconds: float,
 ) -> None:
     """Decode only the requested interval and write mono 16 kHz PCM to disk."""
-    with av.open(video_path, mode="r", metadata_errors="ignore") as container:
+    with av.open(video_path, mode="r") as container:
         audio_stream = next(
             (stream for stream in container.streams if stream.type == "audio"),
             None,

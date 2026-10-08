@@ -6,12 +6,23 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+APP_ENV = (
+    os.getenv("APP_ENV") or os.getenv("ENVIRONMENT") or "development"
+).strip().lower()
+IS_LOCAL_ENVIRONMENT = APP_ENV in {"local", "development", "dev", "test"} or "PYTEST_CURRENT_TEST" in os.environ
+
 DATABASE_URL = os.getenv("DATABASE_URL")
+if DATABASE_URL is not None:
+    DATABASE_URL = DATABASE_URL.strip()
 
 if not DATABASE_URL:
-    raise ValueError(
-        "DATABASE_URL is not configured."
-    )
+    if IS_LOCAL_ENVIRONMENT:
+        DATABASE_URL = "sqlite:///./video_ai.db"
+    else:
+        raise ValueError(
+            "DATABASE_URL is not configured for this environment. "
+            "Set DATABASE_URL to a PostgreSQL connection string in production."
+        )
 
 
 def _parse_boolean(value: str | None, *, default: bool) -> bool:
